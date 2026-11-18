@@ -8,6 +8,7 @@ from strinix import messaggi
 from strinix.messaggi import t
 from strinix.terminale import Stile, pulisci
 
+PREFISSI = "aiuto|cli|config|verifica|interfacce|ascolta|evento|cattura|etichetta"
 RADICE = Path(__file__).resolve().parent.parent / "strinix"
 
 
@@ -17,7 +18,7 @@ class TestTesti(unittest.TestCase):
         usate = set()
         for f in RADICE.rglob("*.py"):
             sorgente = f.read_text(encoding="utf-8")
-            usate |= set(re.findall(r'"((?:aiuto|cli|config|verifica|interfacce)\.[a-z_.]+)"', sorgente))
+            usate |= set(re.findall(r'"((?:%s)\.[a-z_.]+)"' % PREFISSI, sorgente))
         usate.discard("config.toml")
         mancanti = sorted(k for k in usate if k not in testi and not k.endswith("."))
         self.assertEqual(mancanti, [])
@@ -28,6 +29,11 @@ class TestTesti(unittest.TestCase):
             self.assertIn("interfacce.tipo." + tipo, testi)
         for stato in ("attiva", "spenta", "sconosciuto"):
             self.assertIn("interfacce.stato." + stato, testi)
+        for etichetta in ("questo_computer", "router", "nessuna"):
+            self.assertIn("etichetta." + etichetta, testi)
+        from strinix.sorgente import ERRORI
+        for chiave in ERRORI.values():
+            self.assertIn(chiave, testi)
 
     def test_modelli_ben_formati(self):
         for chiave, modello in messaggi.carica("it").items():

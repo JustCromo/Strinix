@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import platform
+import pwd
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from strinix import config as cfg
-from strinix import rete
-
-CAP_NET_RAW = 13  # il permesso del kernel che serve per leggere i pacchetti grezzi
+from strinix import rete, sorgente
+from strinix.decodifica import scapy_disponibile
 
 
 @dataclass(frozen=True)
@@ -22,23 +22,14 @@ class Controllo:
     valori: dict = field(default_factory=dict)
 
 
-def capacita_effettive(status: Path = Path("/proc/self/status")) -> int:
-    try:
-        for riga in status.read_text(encoding="ascii", errors="replace").splitlines():
-            if riga.startswith("CapEff:"):
-                return int(riga.split()[1], 16)
-    except (OSError, ValueError, IndexError):
-        pass
-    return 0
-
-
-def puo_catturare(cap: int | None = None) -> bool:
-    cap = capacita_effettive() if cap is None else cap
-    return bool(cap >> CAP_NET_RAW & 1)
+def modificabile_da_me(percorso: Path) -> bool:
+    """True se il mio utente puo' cambiare il file o una delle cartelle che lo contengono."""
+    return any(os.access(p, os.W_OK) for p in (percorso, *percorso.parents))
 
 
 def controlla(percorso_config: Path | None = None, *, sys_net: Path = rete.SYS_NET,
-              route: Path = rete.PROC_ROUTE, cap: int | None = None, euid: int | None = None) -> list[Controllo]:
+              route: Path = rete.PROC_ROUTE, euid: int | None = None,
+              custode: Path = sorgente.CUSTODE) -> list[Controllo]:
     euid = os.geteuid() if euid is None else euid
     esiti: list[Controllo] = []
 
@@ -54,8 +45,8 @@ def controlla(percorso_config: Path | None = None, *, sys_net: Path = rete.SYS_N
     if euid == 0:
         esiti.append(Controllo("avviso", "verifica.root"))
 
-    esiti.append(Controllo("ok", "verifica.scapy_ok") if importlib.util.find_spec("scapy")
-                 else Controllo("avviso", "verifica.scapy_manca"))
+    esiti.append(Controllo("ok", "verifica.scapy_ok") if scapy_disponibile()
+                 else Controllo("errore", "verifica.scapy_manca"))
 
     richiesta = "auto"
     try:
@@ -85,6 +76,15 @@ def controlla(percorso_config: Path | None = None, *, sys_net: Path = rete.SYS_N
     else:
         esiti.append(Controllo("avviso", "verifica.router_manca"))
 
-    esiti.append(Controllo("ok", "verifica.cattura_ok") if puo_catturare(cap)
-                 else Controllo("avviso", "verifica.cattura_manca"))
+    if shutil.which("sudo") is None:
+        esiti.append(Controllo("errore", "verifica.sudo_manca"))
+    else:
+        try:
+            pwd.getpwnam("nobody")
+        except KeyError:
+            esiti.append(Controllo("errore", "verifica.nobody_manca"))
+        else:
+            esiti.append(Controllo("ok", "verifica.cattura_ok"))
+    if euid != 0 and modificabile_da_me(custode):
+        esiti.append(Controllo("avviso", "verifica.cattura_sviluppo"))
     return esiti

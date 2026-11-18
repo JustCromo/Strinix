@@ -16,8 +16,9 @@ from pathlib import Path
 
 from strinix.messaggi import LINGUE
 
-# nomi interfaccia Linux: al massimo 15 caratteri (IFNAMSIZ - 1), solo caratteri innocui
-_NOME_INTERFACCIA = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+# nomi interfaccia Linux: al massimo 15 caratteri (IFNAMSIZ - 1), solo caratteri innocui,
+# e mai un trattino all'inizio (non deve sembrare un'opzione, es. "-h")
+_NOME_INTERFACCIA = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,14}$")
 MAX_BYTE = 16 * 1024
 CHIAVI = ("interfaccia", "lingua")
 

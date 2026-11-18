@@ -7,13 +7,17 @@ d'aiuto e una funzione. Per aggiungerne uno basta una voce in COMANDI.
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TextIO
 
 from strinix import __version__, ambiente, rete
 from strinix import config as cfg
+from strinix.decodifica import decodifica, scapy_disponibile
 from strinix.messaggi import imposta_lingua, t
+from strinix.sorgente import Cattura, CatturaError
+from strinix.stato import Evento, Memoria
 from strinix.terminale import Stile, colori_attivi
 
 SIMBOLI = {"ok": "✔", "avviso": "!", "errore": "✘"}
@@ -107,14 +111,71 @@ def _config(args: list[str], stile: Stile, out: TextIO) -> int:
     return 0
 
 
+def _riga_evento(e: Evento, stile: Stile) -> str:
+    ora = time.strftime("%H:%M:%S", time.localtime(e.ora))
+    valori = dict(e.valori)
+    if "etichetta" in valori:
+        valori["etichetta"] = t("etichetta." + valori["etichetta"])
+    simbolo = stile("avviso", "!") if e.livello == "avviso" else stile("ok", "●")
+    testo = t(e.chiave, **valori)
+    return f"  {stile('tenue', ora)} {simbolo} {stile('avviso', testo) if e.livello == 'avviso' else testo}"
+
+
+def _ascolta(args: list[str], stile: Stile, out: TextIO) -> int:
+    if not scapy_disponibile():
+        print(stile("errore", t("verifica.scapy_manca")), file=sys.stderr)
+        return 1
+    try:
+        richiesta = cfg.carica().interfaccia
+    except cfg.ConfigError as exc:
+        print(stile("errore", t(exc.chiave, **exc.valori)), file=sys.stderr)
+        return 1
+    interfacce = rete.elenca()
+    strada = rete.strada_predefinita()
+    scelta = rete.scegli(richiesta, interfacce, strada)
+    if scelta is None:
+        print(stile("errore", t("verifica.interfaccia_manca")), file=sys.stderr)
+        return 1
+    router_mac = rete.mac_di(strada.gateway) if strada else None
+    memoria = Memoria(mio_mac=scelta.mac, router_mac=router_mac)
+    print(stile("titolo", t("ascolta.titolo", nome=scelta.nome)), file=out)
+    print(stile("tenue", t("ascolta.sudo")), file=out, flush=True)
+    pacchetti = illeggibili = 0
+    inizio = time.monotonic()
+    codice = 0
+    try:
+        with Cattura(scelta.nome) as cattura:
+            for frame in cattura.frame():
+                if pacchetti == 0:
+                    print(stile("ok", t("ascolta.avviata")), file=out, flush=True)
+                pacchetti += 1
+                try:
+                    p = decodifica(frame.dati)
+                except ValueError:
+                    illeggibili += 1
+                    continue
+                for e in memoria.osserva(p, frame.ora):
+                    print(_riga_evento(e, stile), file=out, flush=True)
+    except CatturaError as exc:
+        print(stile("errore", t(exc.chiave, **exc.valori)), file=sys.stderr)
+        codice = 1
+    except KeyboardInterrupt:
+        pass
+    print(file=out)
+    print(t("ascolta.riepilogo", pacchetti=pacchetti, secondi=round(time.monotonic() - inizio),
+            dispositivi=len(memoria.dispositivi), illeggibili=illeggibili), file=out)
+    return codice
+
+
 COMANDI: dict[str, Comando] = {c.nome: c for c in (
+    Comando("ascolta", "aiuto.ascolta", _ascolta),
     Comando("verifica", "aiuto.verifica", _verifica),
     Comando("interfacce", "aiuto.interfacce", _interfacce),
     Comando("config", "aiuto.config", _config),
     Comando("versione", "aiuto.versione", _versione),
     Comando("aiuto", "aiuto.aiuto", _aiuto),
 )}
-SENZA_ARGOMENTI = {"verifica", "interfacce", "versione", "aiuto"}
+SENZA_ARGOMENTI = {"ascolta", "verifica", "interfacce", "versione", "aiuto"}
 
 
 def main(argv: list[str] | None = None, out: TextIO | None = None) -> int:

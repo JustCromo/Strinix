@@ -22,6 +22,8 @@ PROC_ROUTE = Path("/proc/net/route")
 _MAC = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 _SIOCGIFADDR = 0x8915  # ioctl che restituisce l'indirizzo IPv4 di un'interfaccia
 _RTF_UP, _RTF_GATEWAY = 0x1, 0x2
+_IFF_UP = 0x1
+PROC_ARP = Path("/proc/net/arp")
 
 
 @dataclass(frozen=True)
@@ -67,7 +69,13 @@ def _tipo(cartella: Path, nome: str) -> str:
 
 
 def _stato(cartella: Path) -> str:
-    return {"up": "attiva", "down": "spenta", "dormant": "spenta"}.get(_leggi(cartella / "operstate"), "sconosciuto")
+    stato = {"up": "attiva", "down": "spenta", "dormant": "spenta"}.get(_leggi(cartella / "operstate"), "sconosciuto")
+    if stato == "sconosciuto":  # es. la loopback: il kernel non da' uno stato, ma i flag dicono se e' accesa
+        try:
+            stato = "attiva" if int(_leggi(cartella / "flags"), 16) & _IFF_UP else "spenta"
+        except ValueError:
+            pass
+    return stato
 
 
 def elenca(sys_net: Path = SYS_NET, leggi_ipv4: Callable[[str], str | None] = ipv4_di) -> list[Interfaccia]:
@@ -127,3 +135,18 @@ def scegli(richiesta: str, interfacce: list[Interfaccia], strada: Strada | None)
         return per_nome[strada.interfaccia]
     attive = [i for i in interfacce if i.stato == "attiva" and i.tipo in ("wifi", "cablata")]
     return attive[0] if attive else None
+
+
+def mac_di(ip: str, arp: Path = PROC_ARP) -> str | None:
+    """MAC che il kernel ha gia' associato a `ip` (tabella ARP, leggibile senza privilegi)."""
+    try:
+        righe = arp.read_text(encoding="ascii", errors="replace").splitlines()[1:1025]
+    except OSError:
+        return None
+    for riga in righe:
+        campi = riga.split()
+        if len(campi) >= 4 and campi[0] == ip:
+            mac = campi[3].lower()
+            if _MAC.match(mac) and mac != "00:00:00:00:00:00":
+                return mac
+    return None

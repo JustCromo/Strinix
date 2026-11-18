@@ -48,7 +48,7 @@ class TestCarica(Base):
         self.assertEqual(self.errore(), "config.chiave_sconosciuta")
 
     def test_interfacce_malevole(self):
-        for nome in ("../../etc", "eth0; rm -rf ~", "\x1b[2Jeth0", "a" * 16, "", ".", "..", "eth 0"):
+        for nome in ("../../etc", "-h", "--help", "eth0; rm -rf ~", "\x1b[2Jeth0", "a" * 16, "", ".", "..", "eth 0"):
             with self.subTest(nome=nome):
                 self.scrivi(f"interfaccia = {json.dumps(nome)}\n")
                 self.assertEqual(self.errore(), "config.interfaccia_non_valida")
