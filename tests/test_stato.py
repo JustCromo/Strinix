@@ -180,6 +180,17 @@ class TestChiaro(unittest.TestCase):
         visto = list(self.m.chiaro.values())[0]
         self.assertEqual((visto.volte, visto.credenziali, visto.dove), (3, True, "example.com"))
 
+    def test_controllo_di_connessione_non_e_un_avviso(self):
+        e = [x for x in self.chiaro(False, 0, dove="ping.archlinux.org")]
+        self.assertEqual([(x.chiave, x.livello) for x in e if "chiaro" in x.chiave or "controllo" in x.chiave],
+                         [("evento.controllo_connessione", "info")])
+        self.assertEqual(len(self.m.chiaro), 0)
+        self.assertEqual([x for x in self.chiaro(False, 10, dove="ping.archlinux.org") if "controllo" in x.chiave], [])
+
+    def test_password_verso_un_controllo_resta_grave(self):
+        e = self.chiaro(True, 0, dove="ping.archlinux.org")
+        self.assertIn(("evento.chiaro_password", "grave"), [(x.chiave, x.livello) for x in e])
+
     def test_limite(self):
         for i in range(MAX_CHIARO + 100):
             self.chiaro(False, i, dove=f"s{i}.it")

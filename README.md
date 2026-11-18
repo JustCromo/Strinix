@@ -174,7 +174,9 @@ avviso non si ripete prima di 5 minuti, salvo che diventi più grave.
   manda in chiaro all'inizio della connessione (SNI). Il contenuto resta cifrato.
 - **Traffico in chiaro**: riconosce HTTP, FTP, Telnet, POP3, IMAP e SMTP senza
   cifratura. Se passa una password se ne accorge, ma **non la legge, non la
-  salva e non la mostra mai**.
+  salva e non la mostra mai**. I controlli di connessione di sistemi e browser
+  (es. `ping.archlinux.org`, che viaggiano in HTTP apposta per scoprire le
+  pagine di login dei wifi) non sono avvisi: compaiono solo in Live.
 
 ### Colori
 

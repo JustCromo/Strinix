@@ -27,6 +27,13 @@ CONNESSIONE_SILENZIO = 300.0
 CHIARO_SILENZIO = 300.0
 ONLINE = 300.0            # visto negli ultimi 5 minuti = online
 RITORNO = 3600.0          # se un dispositivo noto ricompare dopo un'ora, Strinix lo dice
+# controlli di connessione dei sistemi operativi e dei browser: viaggiano in HTTP apposta
+# (servono a scoprire le pagine di login dei wifi) e non portano nulla di personale
+CONTROLLI_CONNESSIONE = frozenset({
+    "ping.archlinux.org", "nmcheck.gnome.org", "network-test.debian.org", "connectivity-check.ubuntu.com",
+    "detectportal.firefox.com", "connectivitycheck.gstatic.com", "connectivitycheck.android.com",
+    "clients3.google.com", "captive.apple.com", "www.msftconnecttest.com", "www.msftncsi.com",
+})
 
 SERVIZI = {
     ("tcp", 443): "HTTPS", ("udp", 443): "HTTPS (QUIC)", ("tcp", 80): "HTTP", ("tcp", 8080): "HTTP",
@@ -273,6 +280,15 @@ class Memoria:
             return
         chi = self.chi(p.mac_sorgente, p.ip_sorgente)
         dove = self._dove(p)
+        if (p.chiaro.protocollo == "HTTP" and dove.lower() in CONTROLLI_CONNESSIONE
+                and not p.chiaro.credenziali):
+            chiave_controllo = (p.ip_sorgente, "controllo", dove)
+            ultima = self.connessioni.get(chiave_controllo)
+            if ultima is None or ora - ultima >= CHIARO_SILENZIO:
+                eventi.append(Evento(ora, "info", "evento.controllo_connessione",
+                                     {"chi": chi, "ip": p.ip_sorgente, "dove": dove}))
+            _ricorda(self.connessioni, chiave_controllo, ora, MAX_CONNESSIONI)
+            return
         chiave = (p.ip_sorgente, p.chiaro.protocollo, dove)
         visto = self.chiaro.get(chiave)
         nuova_password = p.chiaro.credenziali and not (visto and visto.credenziali)
