@@ -659,8 +659,11 @@ class Cockpit:
         """Due righe, come Erinix: una frase sulla situazione, poi i numeri e il grafico dell'attivita'."""
         tema = self.tema
         avvisi, password = len(ist.avvisi), ist.password_in_chiaro
+        gravi = sum(e.livello == "grave" for e in ist.avvisi)
         if password:
             frase: Riga = [("errore", t("testata.password", numero=password))]
+        elif gravi:
+            frase = [("errore", t("testata.gravi", numero=gravi))]
         elif avvisi:
             frase = [("avviso", t("testata.avvisi", numero=avvisi))]
         else:
@@ -781,7 +784,8 @@ class Cockpit:
 
 
 MAX_COMANDO = 200
-CAMPI_MOSTRATI = ("mac", "ip", "prima", "ora", "nome", "chi", "dove", "ip_dove", "servizio", "protocollo", "produttore")
+CAMPI_MOSTRATI = ("mac", "ip", "prima", "ora", "nome", "chi", "dove", "ip_dove", "servizio", "protocollo", "produttore",
+                  "quanti", "porte", "secondi", "router", "vero_router", "lunghezza", "dominio", "volte")
 
 
 def esegui(cockpit: Cockpit, fd_in: int, out) -> int:

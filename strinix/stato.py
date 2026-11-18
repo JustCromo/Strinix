@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from strinix.decodifica import Pacchetto
 from strinix.produttori import produttore as _produttore
+from strinix.rilevatori import Rilevatori
 
 MAX_DISPOSITIVI = 1024
 MAX_DNS = 512
@@ -114,8 +115,8 @@ def _ricorda(lru: OrderedDict, chiave, valore, massimo: int) -> None:
 class Memoria:
     def __init__(self, mio_mac: str | None = None, router_mac: str | None = None, mio_ip: str | None = None,
                  max_dispositivi: int = MAX_DISPOSITIVI, max_dns: int = MAX_DNS,
-                 produttore: Callable[[str], str | None] = _produttore) -> None:
-        self.mio_mac, self.router_mac, self.mio_ip = mio_mac, router_mac, mio_ip
+                 produttore: Callable[[str], str | None] = _produttore, router_ip: str | None = None) -> None:
+        self.mio_mac, self.router_mac, self.mio_ip, self.router_ip = mio_mac, router_mac, mio_ip, router_ip
         self.max_dispositivi, self.max_dns = max_dispositivi, max_dns
         self._produttore = produttore
         self.dispositivi: dict[str, Dispositivo] = {}  # MAC -> scheda del dispositivo
@@ -126,6 +127,10 @@ class Memoria:
         self.chiaro: OrderedDict[tuple, InChiaro] = OrderedDict()
         self.dns_in_chiaro_mio = 0    # richieste DNS non cifrate partite da questo computer
         self.piena = False
+        self.rilevatori = Rilevatori(self)
+        if router_ip and router_mac:
+            # il MAC del router lo conosciamo gia' (dal kernel): chi prova a prenderne il posto si vede subito
+            self.arp[router_ip] = router_mac
 
     def etichetta(self, mac: str) -> str:
         if mac == self.mio_mac:
@@ -162,6 +167,7 @@ class Memoria:
         self._dns(p, ora, eventi)
         self._connessione(p, ora, eventi)
         self._chiaro(p, ora, eventi)
+        eventi += self.rilevatori.osserva(p, ora)
         return eventi
 
     def _arp(self, p: Pacchetto, ora: float, eventi: list[Evento]) -> str | None:
@@ -175,7 +181,7 @@ class Memoria:
                 self._segnala_piena(ora, eventi)
         elif prima != p.arp.mac:
             self.arp[p.arp.ip] = p.arp.mac
-            eventi.append(Evento(ora, "avviso", "evento.arp_cambio", {"ip": p.arp.ip, "prima": prima, "ora": p.arp.mac}))
+            eventi += self.rilevatori.cambio_arp(p.arp.ip, prima, p.arp.mac, ora)
         return p.arp.ip if p.arp.mac == p.mac_sorgente else None
 
     def _dispositivo(self, p: Pacchetto, ora: float, ip_noto: str | None, eventi: list[Evento]) -> None:

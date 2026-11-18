@@ -120,6 +120,27 @@ Il terminale viene sempre ripristinato, anche con Ctrl+C o se la finestra
 viene chiusa. Per ora, chiudendo il cockpit si ferma anche l'ascolto: l'agente
 in background arriverà nella prossima versione.
 
+### Cosa rileva
+
+Solo cose che il tuo portatile vede davvero (il tuo traffico e i messaggi che
+i dispositivi mandano a tutti), con soglie prudenti per non dare falsi allarmi:
+
+| Rilevatore | Quando scatta | Gravità |
+|---|---|---|
+| **Scansione della rete** | un dispositivo cerca 20+ indirizzi diversi in 10 secondi (ARP) | avviso, grave da 100; solo informazione se è il router o questo computer |
+| **Scansione delle porte** | qualcuno bussa a 15+ porte di questo computer in 10 secondi | avviso, grave da 100 |
+| **Qualcuno si spaccia per il router** | l'IP del router risponde da un altro MAC | grave |
+| **Un MAC con tanti IP** | lo stesso dispositivo rivendica 3+ indirizzi | grave |
+| **IP che rimbalza** | un indirizzo passa avanti e indietro tra due MAC | grave |
+| **IP riassegnato** | un indirizzo passa a un altro dispositivo, ma il vecchio è sparito da 10 minuti | solo informazione |
+| **DHCP falso** | un secondo server distribuisce indirizzi e propone un router diverso da quello vero | grave (avviso se non propone un router) |
+| **DNS lunghissimi** | nomi oltre 100 caratteri: possibile DNS tunneling | avviso |
+| **Domini casuali** | nomi come `xjw9q2kz8fpl.com`, tipici dei malware | avviso |
+| **Password in chiaro** | una password passa senza cifratura (Strinix non la legge) | grave |
+
+Ogni avviso ha la sua pagina con *Cosa significa* e *Cosa fare*. Lo stesso
+avviso non si ripete prima di 5 minuti, salvo che diventi più grave.
+
 ### Come riconosce le cose
 
 - **Produttore**: dai primi 3 byte del MAC, con l'elenco che Scapy si porta

@@ -194,7 +194,8 @@ def _ascolta(ctx: Contesto, args: Argomenti) -> int:
         ctx.errore("verifica.interfaccia_manca")
         return FALLITO
     router_mac = rete.mac_di(strada.gateway) if strada else None
-    memoria = Memoria(mio_mac=scelta.mac, router_mac=router_mac, mio_ip=scelta.ipv4)
+    memoria = Memoria(mio_mac=scelta.mac, router_mac=router_mac, mio_ip=scelta.ipv4,
+                      router_ip=strada.gateway if strada else None)
     ctx.scrivi(tema("accento", t("ascolta.titolo", nome=scelta.nome)))
     print(tema("tenue", t("ascolta.sudo")), file=ctx.out, flush=True)
     pacchetti = illeggibili = 0

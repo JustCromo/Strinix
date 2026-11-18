@@ -70,7 +70,8 @@ class Sessione:
                  decodifica: Callable = _decodifica, max_eventi: int = MAX_EVENTI) -> None:
         self.interfaccia, self.strada, self.router_mac = interfaccia, strada, router_mac
         self._crea_cattura, self._decodifica = cattura, decodifica
-        self.memoria = Memoria(mio_mac=interfaccia.mac, router_mac=router_mac, mio_ip=interfaccia.ipv4)
+        self.memoria = Memoria(mio_mac=interfaccia.mac, router_mac=router_mac, mio_ip=interfaccia.ipv4,
+                               router_ip=strada.gateway if strada else None)
         self._eventi: deque[Evento] = deque(maxlen=max_eventi)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None

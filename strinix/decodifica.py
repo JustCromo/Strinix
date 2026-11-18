@@ -79,6 +79,9 @@ class Pacchetto:
     risposte_dns: tuple[tuple[str, str], ...] = ()   # (nome, ip) dalle risposte DNS
     nome_host: str | None = None                 # il nome che il dispositivo dichiara (DHCP, mDNS)
     chiaro: Chiaro | None = None
+    dhcp_tipo: int | None = None                 # 1 discover, 2 offer, 3 request, 5 ack...
+    dhcp_server: str | None = None               # chi dice di essere il server DHCP
+    dhcp_router: str | None = None               # il router che quel server sta proponendo
 
 
 def _mac(valore: object) -> str | None:
@@ -251,10 +254,18 @@ def decodifica(dati: bytes) -> Pacchetto:
                         campi["nome_host"] = nome_valido(nome[:-6], 63)
                         break
         if s["DHCP"] in e:
-            for opzione in e[s["DHCP"]].options:
-                if isinstance(opzione, tuple) and len(opzione) >= 2 and opzione[0] == "hostname":
-                    campi["nome_host"] = nome_valido(opzione[1], 63)
-                    break
+            for opzione in e[s["DHCP"]].options[:64]:
+                if not (isinstance(opzione, tuple) and len(opzione) >= 2):
+                    continue
+                nome, valore = opzione[0], opzione[1]
+                if nome == "hostname" and "nome_host" not in campi:
+                    campi["nome_host"] = nome_valido(valore, 63)
+                elif nome == "message-type" and isinstance(valore, int) and 1 <= valore <= 18:
+                    campi["dhcp_tipo"] = valore
+                elif nome == "server_id":
+                    campi["dhcp_server"] = _ip(valore)
+                elif nome == "router":
+                    campi["dhcp_router"] = _ip(valore)
         return Pacchetto(_mac(e.src), _mac(e.dst), **campi)
     except Exception as exc:  # Scapy puo' sollevare di tutto su pacchetti costruiti apposta
         raise ValueError("pacchetto illeggibile") from exc

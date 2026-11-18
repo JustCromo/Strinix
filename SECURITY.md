@@ -63,7 +63,14 @@ sistema, di proprietà di root.
   lunghezza prima di usarla: un pacchetto con lunghezze bugiarde o tagliato
   viene ignorato. I test lo provano con pacchetti troncati e casuali.
 - Ogni elenco in memoria ha un limite fisso (dispositivi, connessioni, nomi,
-  traffico in chiaro, destinazioni di ogni dispositivo).
+  traffico in chiaro, destinazioni di ogni dispositivo, e lo stato dei
+  rilevatori: finestre di conteggio, cambi ARP, avvisi già dati). Chi inonda
+  la rete di indirizzi falsi per "accecare" Strinix riempie solo questi
+  elenchi a dimensione fissa, e Strinix lo segnala.
+- I rilevatori hanno soglie prudenti e test sui casi innocui (il router che
+  controlla la rete, un IP riassegnato, un server DHCP della scuola che indica
+  il router vero, nomi di dominio normali di Google o dei CDN), perché un
+  falso allarme insegna a ignorare quelli veri.
 
 ## Comandi e terminale
 
