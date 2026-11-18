@@ -1,9 +1,14 @@
-"""Il cockpit: la schermata a tutto terminale di Strinix.
+"""Il cockpit: la schermata a tutto terminale di Strinix (stessa impostazione di Erinix).
+
+Tre livelli, come in Erinix:
+1. la panoramica: tutti i pannelli insieme, numerati, quello attivo con il bordo colorato;
+2. Invio: il pannello attivo a tutto schermo;
+3. Invio di nuovo: la pagina di dettaglio della riga scelta (cosa significa, cosa fare,
+   cosa e' successo), con il testo che va a capo.
 
 E' solo una *vista*: legge un'istantanea dalla fonte (oggi la sessione di ascolto,
-domani l'agente in background) e la disegna. Lo stato del cockpit (pannello,
-selezione, riga dei comandi) e il disegno sono separati dal terminale, cosi'
-si possono provare senza un terminale vero.
+domani l'agente in background) e la disegna. Lo sfondo non viene dipinto: si vede
+quello del terminale, come in Erinix.
 """
 
 from __future__ import annotations
@@ -28,23 +33,22 @@ from strinix.ui import tema as tm
 from strinix.ui.testo import Riga, adatta, avvolgi, componi, larghezza, larghezza_riga, taglia
 
 PANNELLI = ("avvisi", "live", "dispositivi", "chiaro", "rete")
-LATERALI = ("riepilogo",)                          # pannelli che compaiono solo nella colonna di destra
 ORDINI = ("comparsa", "traffico", "nome", "ip")     # come si possono ordinare i dispositivi (tasto o)
-RUOLO_LIVELLO = {"info": "testo", "avviso": "avviso", "grave": "errore"}
 SIMBOLO_LIVELLO = {"info": "punto", "avviso": "avviso", "grave": "errore"}
+RUOLO_LIVELLO = {"info": "testo", "avviso": "avviso", "grave": "errore"}
+SCHERMO_LARGO = 100   # da qui in su la panoramica a griglia; sotto, un pannello alla volta
+ALTEZZA_MINIMA = 18
 MAX_NOME_COLONNA = 28
-MIN_SECONDARIO = 8    # sotto questa altezza un pannello in piu' non vale la pena
 NOTIFICA = 3.0        # secondi in cui resta visibile un messaggio come "copiato"
-LATERALE = 40          # larghezza minima della colonna di destra sugli schermi larghi
-SCHERMO_LARGO = 100
-MAX_COMANDO = 200
+BLOCCHI = "▁▂▃▄▅▆▇█"
+BLOCCHI_ASCII = "_.-=+*#@"
 
 
 def _ora(secondi: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(secondi))
 
 
-def _byte(n: int) -> str:
+def _byte(n: float) -> str:
     for unita in ("B", "KB", "MB", "GB"):
         if n < 1024 or unita == "GB":
             return f"{n:.0f} {unita}" if unita == "B" else f"{n:.1f} {unita}"
@@ -71,27 +75,51 @@ def _chiave_ip(ip: str | None) -> tuple:
         return (9, 0)
 
 
+def titolo_evento(e: Evento) -> str:
+    """La frase breve che va nelle liste; il testo lungo sta nella pagina di dettaglio."""
+    valori = dict(e.valori)
+    if e.chiave == "evento.nuovo_dispositivo":
+        valori["nome"] = valori.get("produttore") or t("titolo.un_dispositivo")
+        valori["etichetta"] = t("etichetta." + valori.get("etichetta", "nessuna"))
+    return t("titolo." + e.chiave.removeprefix("evento."), **valori)
+
+
+def _rientro(riga: Riga) -> int:
+    """Di quanto rientrano le righe che vanno a capo: spazi iniziali, piu' "1. " o "· " degli elenchi."""
+    testo = "".join(x for _, x in riga)
+    spazi = len(testo) - len(testo.lstrip(" "))
+    resto = testo[spazi:]
+    if len(resto) > 2 and resto[0].isdigit() and resto[1:3] == ". ":
+        return spazi + 3
+    if resto[:2] in ("· ", "- ", "• "):
+        return spazi + 2
+    if len(resto) > 9 and resto[2] == ":" and resto[5] == ":" and resto[8] == " ":   # "14:17:25 ..."
+        return spazi + 9
+    return spazi
+
+
 class Cockpit:
     def __init__(self, registro: Registro, tema: tm.Tema, fonte, *, storia: list[str] | None = None,
                  prima_volta: bool = False) -> None:
         self.registro, self.tema, self.fonte = registro, tema, fonte
-        self.pannello = 1
-        self.selezione = {p: 0 for p in PANNELLI + LATERALI}
+        self.pannello = 0
+        self.selezione = {p: 0 for p in PANNELLI}
         self.segui_live = True
-        self.filtro = {p: "" for p in PANNELLI + LATERALI}
-        self.intero = False
+        self.filtro = {p: "" for p in PANNELLI}
+        self.intero = False                    # il pannello attivo a tutto schermo
         self.pausa = False
         self._congelata: Istantanea | None = None
-        self.modo = "normale"          # "normale", "comando", "cerca"
+        self.modo = "normale"                  # "normale", "comando", "cerca"
         self.buffer = ""
         self.storia = list(storia or [])
         self._indice_storia = len(self.storia)
-        self.sovrapposto: tuple[str, list[Riga]] | None = None
+        self.sovrapposto: tuple[str, list[Riga]] | None = None   # la pagina aperta: titolo e righe
         self.scorri_sovr = 0
         self.fine = False
         self.ordine = 0
-        self.da_copiare: str | None = None              # il ciclo lo manda al terminale (OSC 52)
+        self.da_copiare: str | None = None     # il ciclo lo manda al terminale (OSC 52)
         self.notifica: tuple[str, float] | None = None
+        self._nascosti: set[str] = set()       # pannelli che non stanno nella panoramica
         if prima_volta:
             self.apri_sovrapposto(t("cockpit.benvenuto.titolo"), self._righe_testo("cockpit.benvenuto.testo"))
 
@@ -103,31 +131,36 @@ class Cockpit:
         return self.fonte.istantanea()
 
     def voci(self, ist: Istantanea, pannello: str, spazio: int | None = None,
-             breve: bool = False) -> list[tuple[Riga, object]]:
+             completo: bool = False) -> list[tuple[Riga, object]]:
         """Le righe del pannello (gia' filtrate) con l'oggetto a cui si riferiscono.
 
-        `spazio` sono le colonne disponibili: se e' poco le righe diventano compatte
-        invece di essere tagliate a meta'. `breve` accorcia i valori (colonna di destra).
+        `spazio` sono le colonne disponibili: se e' poco si mostrano meno colonne invece
+        di tagliare a meta'. `completo` e' il pannello a tutto schermo, con piu' dettagli.
         """
         voci: list[tuple[Riga, object]] = []
-        if pannello in ("live", "avvisi"):
-            eventi = ist.eventi if pannello == "live" else tuple(reversed(ist.avvisi))
-            for e in eventi:
+        if pannello == "live":
+            for e in ist.eventi:
                 ruolo = RUOLO_LIVELLO.get(e.livello, "testo")
                 simbolo = self.tema.simbolo(SIMBOLO_LIVELLO.get(e.livello, "punto"))
-                voci.append(([("tenue", _ora(e.ora) + " "), (ruolo if e.livello != "info" else "ok", simbolo + " "),
-                              (ruolo, testo_evento(e))], e))
+                voci.append(([("tenue", _ora(e.ora) + "  "), (ruolo if e.livello != "info" else "ok", simbolo + " "),
+                              (ruolo, titolo_evento(e))], e))
+        elif pannello == "avvisi":
+            adesso = time.time()
+            for e in reversed(ist.avvisi):
+                ruolo = RUOLO_LIVELLO.get(e.livello, "avviso")
+                voci.append(([(ruolo, self.tema.simbolo(SIMBOLO_LIVELLO.get(e.livello, "avviso")) + " "),
+                              ("testo", titolo_evento(e)), ("tenue", "  " + _fa(adesso - e.ora))], e))
         elif pannello == "dispositivi":
-            voci = self._voci_dispositivi(ist, spazio, compatto=breve)
+            voci = self._voci_dispositivi(ist, spazio, completo)
         elif pannello == "chiaro":
             voci = self._voci_chiaro(ist)
-        elif pannello == "riepilogo":
-            voci = self._voci_riepilogo(ist, spazio)
         else:
-            righe = self._righe_rete(ist, breve=breve)
+            righe = self._righe_rete(ist, breve=not completo)
             etichetta = max(larghezza(t(k)) for k, _, _ in righe) + 2
             for chiave, valore, ruolo in righe:
                 voci.append(([("tenue", t(chiave).ljust(etichetta)), (ruolo, valore)], None))
+            if completo:
+                voci += [(r, None) for r in self._riepilogo(ist)]
         filtro = self.filtro[pannello].lower()
         if filtro:
             voci = [(r, o) for r, o in voci if filtro in "".join(x for _, x in r).lower()]
@@ -157,12 +190,12 @@ class Cockpit:
             return sorted(schede, key=lambda d: _chiave_ip(d.ip))
         return sorted(schede, key=lambda d: d.primo)
 
-    def _voci_dispositivi(self, ist: Istantanea, spazio: int | None, compatto: bool) -> list[tuple[Riga, object]]:
+    def _voci_dispositivi(self, ist: Istantanea, spazio: int | None, completo: bool) -> list[tuple[Riga, object]]:
         schede = self._ordinati(ist)
         if not schede:
             return []
         adesso = time.time()
-        nomi = {d.mac: self.nome_mostrato(ist, d, breve=compatto) for d in schede}
+        nomi = {d.mac: self.nome_mostrato(ist, d) for d in schede}
         su, giu = ("↑", "↓") if self.tema.unicode else ("^", "v")
         traffico = {d.mac: f"{su} {_byte(d.byte_inviati)}  {giu} {_byte(d.byte_ricevuti)}" for d in schede}
         ultima = {d.mac: _fa(adesso - d.ultimo) for d in schede}
@@ -173,23 +206,21 @@ class Cockpit:
             "traffico": max(larghezza(x) for x in traffico.values()),
             "ultima": max(larghezza(x) for x in ultima.values()),
         }
-        if compatto and spazio is not None and spazio - 2 - larghe["ip"] - 2 >= 8:
-            larghe["nome"] = min(larghe["nome"], spazio - 2 - larghe["ip"] - 2)   # nome e IP devono starci tutti e due
         # le colonne entrano in ordine di importanza finche' c'e' posto; poi si mostrano in ordine di lettura
-        priorita = ("nome", "ip") if compatto else ("nome", "ip", "ultima", "traffico", "mac")
+        priorita = ("nome", "ip", "ultima", "traffico", "mac")
         scelte, usato = [], 2
         for col in priorita:
             serve = larghe[col] + (2 if scelte else 0)
             if spazio is not None and usato + serve > spazio:
                 if col == "nome" and spazio - usato >= 8:     # il nome si accorcia, non sparisce
-                    larghe["nome"] = spazio - usato - (larghe["ip"] + 2 if spazio - usato > larghe["ip"] + 10 else 0)
+                    larghe["nome"] = spazio - usato
                     scelte.append(col)
                     usato += larghe["nome"]
                 continue
             scelte.append(col)
             usato += serve
         resto = (spazio - usato - 2) if spazio is not None else 0
-        if not compatto and resto >= 20 and any(d.destinazioni for d in schede):
+        if completo and resto >= 20 and any(d.destinazioni for d in schede):
             scelte.append("dest")
             larghe["dest"] = resto
         voci = []
@@ -198,13 +229,13 @@ class Cockpit:
             vivo = d.online(adesso)
             ruolo_punto = ("accento" if tipo == "questo_computer" else "dati" if tipo == "router" else "ok") if vivo else "tenue"
             riga: Riga = [(ruolo_punto, self.tema.simbolo("punto" if vivo else "vuoto") + " ")]
+            siti = ", ".join(x for x, _ in sorted(d.destinazioni.items(), key=lambda v: -v[1]))
             celle = {"nome": ("testo" if vivo else "tenue", taglia(nomi[d.mac], larghe["nome"]).ljust(larghe["nome"])),
                      "ip": ("testo", (d.ip or "-").ljust(larghe["ip"])),
                      "mac": ("dati", d.mac),
                      "traffico": ("tenue", traffico[d.mac].ljust(larghe["traffico"])),
                      "ultima": ("tenue", ultima[d.mac].ljust(larghe["ultima"])),
-                     "dest": ("dati", taglia(", ".join(x for x, _ in sorted(d.destinazioni.items(), key=lambda v: -v[1])),
-                                             larghe.get("dest", 0)))}
+                     "dest": ("dati", taglia(siti, larghe.get("dest", 0)))}
             primo = True
             for col in ("nome", "ip", "mac", "traffico", "ultima", "dest"):
                 if col in scelte:
@@ -213,42 +244,41 @@ class Cockpit:
             voci.append((riga, d))
         return voci
 
-    def _voci_riepilogo(self, ist: Istantanea, spazio: int | None) -> list[tuple[Riga, object]]:
-        """Chi usa di piu' la rete e i siti piu' visitati: per riempire lo spazio con qualcosa di utile."""
-        voci: list[tuple[Riga, object]] = []
-        attivi = sorted(ist.dispositivi, key=lambda d: -(d.byte_inviati + d.byte_ricevuti))
-        attivi = [d for d in attivi if d.byte_inviati + d.byte_ricevuti > 0][:6]
+    def _voci_chiaro(self, ist: Istantanea) -> list[tuple[Riga, object]]:
+        voci = []
+        adesso = time.time()
+        for c in sorted(ist.chiaro, key=lambda c: -c.ultimo):
+            ruolo = "errore" if c.credenziali else "avviso"
+            riga: Riga = [(ruolo, self.tema.simbolo(ruolo) + " "),
+                          ("testo", t("chiaro.riga", chi=c.chi, protocollo=c.protocollo, dove=c.dove))]
+            if c.credenziali:
+                riga.append(("errore", "  " + t("chiaro.password")))
+            riga.append(("tenue", "  " + _fa(adesso - c.ultimo) + (f"  ×{c.volte}" if c.volte > 1 else "")))
+            voci.append((riga, c))
+        return voci
+
+    def _riepilogo(self, ist: Istantanea) -> list[Riga]:
+        """Chi usa di piu' la rete e i siti piu' usati (nel pannello Rete a tutto schermo)."""
+        righe: list[Riga] = []
+        attivi = [d for d in sorted(ist.dispositivi, key=lambda d: -(d.byte_inviati + d.byte_ricevuti))
+                  if d.byte_inviati + d.byte_ricevuti > 0][:8]
         if attivi:
-            voci.append(([("dati", t("riepilogo.piu_attivi"))], None))
-            larg = (spazio or 40) - 12
+            righe += [[("testo", "")], [("dati", t("riepilogo.piu_attivi"))]]
+            larg = max(larghezza(self.nome_mostrato(ist, d)) for d in attivi) + 2
             for d in attivi:
-                nome = taglia(self.nome_mostrato(ist, d), larg).ljust(larg)
-                voci.append(([("testo", nome), ("tenue", f"{_byte(d.byte_inviati + d.byte_ricevuti):>10}")], None))
+                righe.append([("testo", self.nome_mostrato(ist, d).ljust(larg)),
+                              ("tenue", _byte(d.byte_inviati + d.byte_ricevuti))])
         siti: dict[str, int] = {}
         for d in ist.dispositivi:
             for dove, volte in d.destinazioni.items():
                 siti[dove] = siti.get(dove, 0) + volte
         if siti:
-            if voci:
-                voci.append(([("testo", "")], None))
-            voci.append(([("dati", t("riepilogo.siti"))], None))
-            larg = (spazio or 40) - 8
-            for dove, volte in sorted(siti.items(), key=lambda x: -x[1])[:8]:
-                voci.append(([("testo", taglia(dove, larg).ljust(larg)), ("tenue", f"{'×' + str(volte):>6}")], None))
-        return voci
-
-    def _voci_chiaro(self, ist: Istantanea) -> list[tuple[Riga, object]]:
-        voci = []
-        for c in sorted(ist.chiaro, key=lambda c: -c.ultimo):
-            ruolo = "errore" if c.credenziali else "avviso"
-            riga: Riga = [("tenue", _ora(c.ultimo) + " "), (ruolo, self.tema.simbolo(ruolo) + " "),
-                          ("testo", t("chiaro.riga", chi=c.chi, protocollo=c.protocollo, dove=c.dove))]
-            if c.credenziali:
-                riga.append(("errore", "  " + t("chiaro.password")))
-            if c.volte > 1:
-                riga.append(("tenue", f"  ×{c.volte}"))
-            voci.append((riga, c))
-        return voci
+            righe += [[("testo", "")], [("dati", t("riepilogo.siti"))]]
+            ordinati = sorted(siti.items(), key=lambda x: -x[1])[:10]
+            larg = max(larghezza(x) for x, _ in ordinati) + 2
+            for dove, volte in ordinati:
+                righe.append([("testo", dove.ljust(larg)), ("tenue", f"×{volte}")])
+        return righe
 
     def _righe_rete(self, ist: Istantanea, breve: bool = False) -> list[tuple[str, str, str]]:
         i, s = ist.interfaccia, ist.strada
@@ -278,14 +308,94 @@ class Cockpit:
             ("rete.dns", dns[1], dns[0]),
         ]
 
-    # ------------------------------------------------------------ tasti
+    # ------------------------------------------------------------ pagine di dettaglio
 
     def apri_sovrapposto(self, titolo: str, righe: list[Riga]) -> None:
         self.sovrapposto = (titolo, righe)
         self.scorri_sovr = 0
 
-    def _righe_testo(self, chiave: str) -> list[Riga]:
-        return [[("testo", r)] for r in t(chiave).split("\n")]
+    def _righe_testo(self, chiave: str, **valori: object) -> list[Riga]:
+        return [[("testo", r)] for r in t(chiave, **valori).split("\n")]
+
+    def _sezione(self, chiave: str) -> list[Riga]:
+        return [[("testo", "")], [("accento", t(chiave))]]
+
+    def _spiegazione(self, tipo: str, valori: dict) -> list[Riga]:
+        """"Cosa significa" e "Cosa fare" per un tipo di evento, se esistono."""
+        righe: list[Riga] = []
+        significato = t(f"spiega.{tipo}.significato", **valori)
+        if not significato.startswith("spiega."):
+            righe += self._sezione("pagina.significato") + [[("testo", r)] for r in significato.split("\n")]
+        fare = t(f"spiega.{tipo}.fare", **valori)
+        if not fare.startswith("spiega."):
+            righe += self._sezione("pagina.fare")
+            righe += [[("testo", f"  {n}. {r}")] for n, r in enumerate(fare.split("\n"), 1)]
+        return righe
+
+    def _chiave_valore(self, coppie: list[tuple[str, str, str]]) -> list[Riga]:
+        larg = max(larghezza(t(k)) for k, _, _ in coppie) + 3
+        return [[("tenue", "  " + t(k).ljust(larg)), (ruolo, v)] for k, v, ruolo in coppie]
+
+    def _eventi_di(self, ist: Istantanea, mac: str | None, ip: str | None) -> list[Riga]:
+        legati = [e for e in ist.eventi if (mac and mac in (e.valori.get("mac"), e.valori.get("ora"), e.valori.get("prima")))
+                  or (ip and ip in (e.valori.get("ip"), e.valori.get("ip_dove")))][-15:]
+        if not legati:
+            return []
+        righe = self._sezione("pagina.successo")
+        for e in legati:
+            ruolo = RUOLO_LIVELLO.get(e.livello, "testo")
+            righe.append([("tenue", "  " + _ora(e.ora) + "  "), (ruolo, titolo_evento(e))])
+        return righe
+
+    def _pagina_evento(self, e: Evento) -> None:
+        ist = self.istantanea()
+        tipo = e.chiave.removeprefix("evento.")
+        valori = dict(e.valori)
+        righe: list[Riga] = self._spiegazione(tipo, valori)[1:] or [[("testo", testo_evento(e))]]
+        coppie = [("dettaglio.ora", f"{_ora(e.ora)} ({_fa(time.time() - e.ora)})", "testo")]
+        coppie += [("campo." + k, str(v), "dati") for k, v in valori.items()
+                   if v not in ("", None) and k in CAMPI_MOSTRATI]
+        righe += self._sezione("pagina.dettagli") + self._chiave_valore(coppie)
+        righe += self._eventi_di(ist, valori.get("mac"), valori.get("ip"))
+        self.apri_sovrapposto(titolo_evento(e), righe)
+
+    def _pagina_chiaro(self, c: InChiaro) -> None:
+        tipo = "chiaro_password" if c.credenziali else "chiaro"
+        valori = {"chi": c.chi, "protocollo": c.protocollo, "dove": c.dove}
+        righe: list[Riga] = [[("errore" if c.credenziali else "avviso", t("titolo." + tipo, **valori))]]
+        righe += self._spiegazione(tipo, valori)
+        righe += self._sezione("pagina.dettagli") + self._chiave_valore([
+            ("dettaglio.chi", c.chi, "testo"), ("dettaglio.protocollo", c.protocollo, "avviso"),
+            ("dettaglio.dove", c.dove, "dati"), ("dettaglio.primo", _ora(c.primo), "testo"),
+            ("dettaglio.ultimo", f"{_ora(c.ultimo)} ({_fa(time.time() - c.ultimo)})", "testo"),
+            ("dettaglio.volte", str(c.volte), "testo")])
+        self.apri_sovrapposto(t("dettaglio.chiaro"), righe)
+
+    def _pagina_dispositivo(self, d: Dispositivo) -> None:
+        ist = self.istantanea()
+        adesso = time.time()
+        vivo = d.online(adesso)
+        righe: list[Riga] = [[("testo", self.nome_mostrato(ist, d)), ("tenue", f"  ·  {d.ip or '-'}  ·  "),
+                              ("ok" if vivo else "tenue", t("dispositivi.online") if vivo else t("dispositivi.offline"))]]
+        righe += self._sezione("pagina.scheda") + self._chiave_valore([
+            ("dettaglio.nome", d.nome or t("dettaglio.nessun_nome"), "testo"),
+            ("dettaglio.produttore", d.produttore or t("dispositivi.produttore_ignoto"), "testo"),
+            ("dettaglio.ip", d.ip or "-", "dati"), ("dettaglio.mac", d.mac, "dati"),
+            ("dettaglio.primo", _ora(d.primo), "testo"),
+            ("dettaglio.ultimo", f"{_ora(d.ultimo)} ({_fa(adesso - d.ultimo)})", "testo"),
+            ("dettaglio.traffico", f"{_byte(d.byte_inviati)} {t('dispositivi.inviati')} · "
+                                   f"{_byte(d.byte_ricevuti)} {t('dispositivi.ricevuti')}", "testo"),
+            ("dettaglio.pacchetti", str(d.pacchetti), "testo")])
+        if d.destinazioni:
+            righe += self._sezione("dettaglio.destinazioni")
+            for dove, volte in sorted(d.destinazioni.items(), key=lambda x: -x[1])[:12]:
+                righe.append([("testo", "  · " + dove), ("tenue", f"  ×{volte}")])
+        if d.mac_casuale:
+            righe += self._sezione("pagina.mac_casuale") + self._righe_testo("dettaglio.mac_casuale")
+        righe += self._eventi_di(ist, d.mac, d.ip)
+        self.apri_sovrapposto(t("dettaglio.dispositivo"), righe)
+
+    # ------------------------------------------------------------ tasti
 
     def _sposta(self, passi: int) -> None:
         nome = PANNELLI[self.pannello]
@@ -306,21 +416,7 @@ class Cockpit:
             self._tasto_riga(k)
             return
         if self.sovrapposto is not None:
-            if k in ("su", "k"):
-                self.scorri_sovr = max(0, self.scorri_sovr - 1)
-            elif k in ("giu", "j"):
-                self.scorri_sovr += 1
-            elif k == "pagsu":
-                self.scorri_sovr = max(0, self.scorri_sovr - 10)
-            elif k == "paggiu":
-                self.scorri_sovr += 10
-            elif k == ":":
-                self.sovrapposto = None
-                self._apri_riga("comando")
-            elif k == "ctrl-c":
-                self.fine = True
-            else:
-                self.sovrapposto = None
+            self._tasto_pagina(k)
             return
         if k in ("q", "ctrl-c", "ctrl-d"):
             if k == "q" and (self.intero or self.filtro[PANNELLI[self.pannello]]):
@@ -329,16 +425,12 @@ class Cockpit:
                 self.fine = True
         elif k == "esc":
             self._indietro()
-        elif k == "tab" or k == "destra":
+        elif k in ("tab", "destra"):
             self.pannello = (self.pannello + 1) % len(PANNELLI)
         elif k in ("maiusc-tab", "sinistra"):
             self.pannello = (self.pannello - 1) % len(PANNELLI)
         elif k in ("1", "2", "3", "4", "5"):
             self.pannello = int(k) - 1
-        elif k == "o" and PANNELLI[self.pannello] == "dispositivi":
-            self.ordine = (self.ordine + 1) % len(ORDINI)
-        elif k == "c":
-            self._copia()
         elif k in ("su", "k"):
             self._sposta(-1)
         elif k in ("giu", "j"):
@@ -351,7 +443,7 @@ class Cockpit:
             self._sposta(-10**9)
         elif k == "fine":
             self._sposta(10**9)
-        elif k == "invio":
+        elif k == "invio":          # come Erinix: prima a tutto schermo, poi il dettaglio della riga
             if not self.intero:
                 self.intero = True
             else:
@@ -365,6 +457,27 @@ class Cockpit:
         elif k == "p":
             self.pausa = not self.pausa
             self._congelata = self.fonte.istantanea() if self.pausa else None
+        elif k == "o" and PANNELLI[self.pannello] == "dispositivi":
+            self.ordine = (self.ordine + 1) % len(ORDINI)
+        elif k == "c":
+            self._copia()
+
+    def _tasto_pagina(self, k: str) -> None:
+        if k in ("su", "k"):
+            self.scorri_sovr = max(0, self.scorri_sovr - 1)
+        elif k in ("giu", "j"):
+            self.scorri_sovr += 1
+        elif k == "pagsu":
+            self.scorri_sovr = max(0, self.scorri_sovr - 10)
+        elif k in ("paggiu", " "):
+            self.scorri_sovr += 10
+        elif k == ":":
+            self.sovrapposto = None
+            self._apri_riga("comando")
+        elif k == "ctrl-c":
+            self.fine = True
+        else:
+            self.sovrapposto = None
 
     def _indietro(self) -> None:
         nome = PANNELLI[self.pannello]
@@ -418,7 +531,7 @@ class Cockpit:
             self.buffer = comune
 
     def esegui(self, testo: str) -> None:
-        """Esegue un comando della tabella e mostra il risultato in un riquadro. Nessuna shell."""
+        """Esegue un comando della tabella e mostra il risultato in una pagina. Nessuna shell."""
         self.storia = cronologia.aggiungi(self.storia, testo)
         out, err = io.StringIO(), io.StringIO()
         ctx = Contesto(tema=tm.Tema(tm.NESSUNO, self.tema.unicode), out=out, err=err,
@@ -456,126 +569,155 @@ class Cockpit:
 
     def _apri_dettaglio(self) -> None:
         oggetto = self._scelto()
-        if oggetto is None:
-            return
-        larg = 24
         if isinstance(oggetto, Evento):
-            righe: list[Riga] = [[("testo", testo_evento(oggetto))], [("testo", "")],
-                                 [("tenue", t("dettaglio.ora") + " "), ("testo", _ora(oggetto.ora))]]
-            righe += [[("tenue", f"{k}: "), ("dati", str(v))] for k, v in oggetto.valori.items() if v not in ("", None)]
-            self.apri_sovrapposto(t("dettaglio.evento"), righe)
+            self._pagina_evento(oggetto)
         elif isinstance(oggetto, InChiaro):
-            c = oggetto
-            righe = [[("tenue", t("dettaglio." + k).ljust(larg)), (ruolo, v)] for k, v, ruolo in (
-                ("chi", c.chi, "testo"), ("protocollo", c.protocollo, "avviso"), ("dove", c.dove, "dati"),
-                ("primo", _ora(c.primo), "testo"), ("ultimo", _ora(c.ultimo), "testo"), ("volte", str(c.volte), "testo"))]
-            righe += [[("testo", "")]] + [[("errore" if c.credenziali else "tenue", r)]
-                                          for r in t("chiaro.spiega_password" if c.credenziali else "chiaro.spiega").split("\n")]
-            self.apri_sovrapposto(t("dettaglio.chiaro"), righe)
+            self._pagina_chiaro(oggetto)
         elif isinstance(oggetto, Dispositivo):
-            ist = self.istantanea()
-            d = oggetto
-            adesso = time.time()
-            campi = (
-                ("nome", self.nome_mostrato(ist, d), "testo"),
-                ("produttore", d.produttore or t("dispositivi.produttore_ignoto"), "testo"),
-                ("ip", d.ip or "-", "dati"), ("mac", d.mac, "dati"),
-                ("stato", t("dispositivi.online") if d.online(adesso) else t("dispositivi.offline"),
-                 "ok" if d.online(adesso) else "tenue"),
-                ("primo", _ora(d.primo), "testo"), ("ultimo", f"{_ora(d.ultimo)} ({_fa(adesso - d.ultimo)})", "testo"),
-                ("traffico", f"{_byte(d.byte_inviati)} {t('dispositivi.inviati')} · "
-                             f"{_byte(d.byte_ricevuti)} {t('dispositivi.ricevuti')}", "testo"),
-                ("pacchetti", str(d.pacchetti), "testo"),
-            )
-            righe = [[("tenue", t("dettaglio." + k).ljust(larg)), (ruolo, v)] for k, v, ruolo in campi]
-            if d.destinazioni:
-                righe += [[("testo", "")], [("dati", t("dettaglio.destinazioni"))]]
-                for dove, volte in sorted(d.destinazioni.items(), key=lambda x: -x[1])[:8]:
-                    righe.append([("testo", "  " + dove), ("tenue", f"  ×{volte}")])
-            if d.mac_casuale:
-                righe += [[("testo", "")]] + [[("tenue", r)] for r in t("dettaglio.mac_casuale").split("\n")]
-            self.apri_sovrapposto(t("dettaglio.dispositivo"), righe)
+            self._pagina_dispositivo(oggetto)
 
     # ------------------------------------------------------------ disegno
 
-    def _riquadro(self, titolo: str, contenuto: list[Riga], colonne: int, altezza: int,
-                  selezionata: int | None = None) -> list[Riga]:
+    def _riquadro(self, titolo: Riga, contenuto: list[Riga], colonne: int, altezza: int,
+                  selezionata: int | None = None, attivo: bool = False) -> list[Riga]:
         s = self.tema.simbolo
+        bordo = "accento" if attivo else "bordo"
         interna = colonne - 2
-        testa = f"{s('o')} {titolo} "
-        righe: list[Riga] = [[("bordo", s("as")), ("dati", taglia_testa(testa, interna, s("o"))), ("bordo", s("ad"))]]
+        testa = [(bordo, s("as") + s("o") + " ")] + titolo + [("testo", " ")]
+        testa = adatta(testa, colonne - 1, s("puntini"))
+        testa[-1] = (bordo, s("o") * larghezza(testa[-1][1])) if testa[-1][1].strip() == "" else testa[-1]
+        righe: list[Riga] = [testa + [(bordo, s("ad"))]]
         for n in range(altezza - 2):
             if n < len(contenuto):
-                segno = [("accento", s("cursore"))] if n == selezionata else [("testo", " ")]
+                segno = [("accento", s("freccia"))] if n == selezionata else [("testo", " ")]
                 corpo = adatta(segno + [("testo", " ")] + contenuto[n], interna, s("puntini"))
             else:
                 corpo = [("testo", " " * interna)]
-            righe.append([("bordo", s("v"))] + corpo + [("bordo", s("v"))])
-        righe.append([("bordo", s("bs") + s("o") * interna + s("bd"))])
+            righe.append([(bordo, s("v"))] + corpo + [(bordo, s("v"))])
+        righe.append([(bordo, s("bs") + s("o") * interna + s("bd"))])
         return righe
 
+    def _titolo(self, nome: str, n_voci: int, attivo: bool) -> Riga:
+        riga: Riga = [("tenue", f"{PANNELLI.index(nome) + 1} "), ("accento" if attivo else "testo", t("pannello." + nome))]
+        if nome in ("avvisi", "dispositivi", "chiaro") and n_voci:
+            riga.append(("tenue", f" {n_voci}"))
+        if nome == "dispositivi" and ORDINI[self.ordine] != "comparsa":
+            riga.append(("tenue", " · " + t("ordine." + ORDINI[self.ordine])))
+        if self.filtro[nome]:
+            riga.append(("avviso", " · " + t("cockpit.filtro", filtro=self.filtro[nome])))
+        return riga
+
     def _pannello(self, ist: Istantanea, nome: str, colonne: int, altezza: int, attivo: bool,
-                  compatto: bool = False) -> list[Riga]:
-        voci = self.voci(ist, nome, colonne - 4, breve=compatto)   # 4 = bordi, cursore e spazio
+                  completo: bool = False) -> list[Riga]:
+        voci = self.voci(ist, nome, colonne - 4, completo)   # 4 = bordi, cursore e spazio
         visibili = max(1, altezza - 2)
         sel = self._selezione_effettiva(nome, len(voci))
         inizio = max(0, min(sel - visibili + 1 if sel >= visibili else 0, max(0, len(voci) - visibili)))
         if sel < inizio:
             inizio = sel
         contenuto = [r for r, _ in voci[inizio:inizio + visibili]]
-        if not attivo and nome in ("live", "avvisi", "chiaro"):
-            # pannello solo da guardare: le righe lunghe vanno a capo invece di essere tagliate
-            avvolte = [x for r, _ in voci for x in avvolgi(r, colonne - 4, rientro=9)]
-            contenuto = avvolte[-visibili:] if nome == "live" else avvolte[:visibili]
         if not voci:
             contenuto = [[("tenue", t("vuoto." + nome) if not self.filtro[nome] else t("vuoto.filtro"))]]
-        titolo = t("pannello." + nome)
-        if nome in ("dispositivi", "avvisi", "chiaro") and voci:
-            titolo += f" · {len(voci)}"
-        if nome == "dispositivi" and attivo and ORDINI[self.ordine] != "comparsa":
-            titolo += " · " + t("ordine." + ORDINI[self.ordine])
-        if self.filtro[nome]:
-            titolo += " · " + t("cockpit.filtro", filtro=self.filtro[nome])
         selezionata = (sel - inizio) if attivo and voci and nome != "rete" else None
-        return self._riquadro(titolo, contenuto, colonne, altezza, selezionata)
+        return self._riquadro(self._titolo(nome, len(voci), attivo), contenuto, colonne, altezza, selezionata, attivo)
 
-    def _testata(self, ist: Istantanea, colonne: int) -> Riga:
+    def _naturale(self, ist: Istantanea, nome: str) -> int:
+        return max(1, len(self.voci(ist, nome))) + 2
+
+    def _panoramica(self, ist: Istantanea, colonne: int, altezza: int) -> list[Riga]:
+        """Tutti i pannelli insieme: a sinistra Avvisi e Live, a destra Dispositivi, In chiaro e Rete."""
+        sx = colonne * 55 // 100
+        dx = colonne - sx - 1
+        attivo = PANNELLI[self.pannello]
+        alt_avvisi = max(4, min(self._naturale(ist, "avvisi"), altezza * 2 // 5))
+        sinistra = (self._pannello(ist, "avvisi", sx, alt_avvisi, attivo == "avvisi")
+                    + self._pannello(ist, "live", sx, altezza - alt_avvisi, attivo == "live"))
+        alt_rete = len(self._righe_rete(ist, breve=True)) + 2
+        alt_chiaro = max(4, min(self._naturale(ist, "chiaro"), altezza // 4))
+        destra_pezzi = [("dispositivi", 0), ("chiaro", alt_chiaro), ("rete", alt_rete)]
+        self._nascosti = set()
+        while sum(h for _, h in destra_pezzi) > altezza - 6 and len(destra_pezzi) > 1:   # finestra bassa
+            nascosto, _ = destra_pezzi.pop(1 if len(destra_pezzi) > 2 else -1)
+            self._nascosti.add(nascosto)
+        fissi = sum(h for _, h in destra_pezzi)
+        destra: list[Riga] = []
+        for nome, h in destra_pezzi:
+            destra += self._pannello(ist, nome, dx, h or (altezza - fissi), attivo == nome)
+        return [sinistra[n] + [("testo", " ")] + destra[n] for n in range(altezza)]
+
+    def _pagina(self, colonne: int, altezza: int) -> list[Riga]:
+        """La pagina di dettaglio a tutto schermo: il testo va a capo e si scorre con le frecce."""
+        assert self.sovrapposto is not None
+        titolo, righe = self.sovrapposto
+        interna = colonne - 4
+        avvolte = [x for r in righe for x in avvolgi(r, interna, _rientro(r))]
+        visibili = max(1, altezza - 2)
+        self.scorri_sovr = max(0, min(self.scorri_sovr, max(0, len(avvolte) - visibili)))
+        return self._riquadro([("accento", titolo)], avvolte[self.scorri_sovr:], colonne, altezza, attivo=True)
+
+    def _testata(self, ist: Istantanea, colonne: int) -> tuple[Riga, Riga]:
+        """Due righe, come Erinix: una frase sulla situazione, poi i numeri e il grafico dell'attivita'."""
         tema = self.tema
-        nome = ist.interfaccia.nome if ist.interfaccia else "-"
-        sinistra: Riga = [("accento", f"{tema.simbolo('gufo')} strinix"), ("tenue", " · " + t("cockpit.in_ascolto") + " "),
-                          ("testo", nome)]
-        if self.pausa:
-            stato: Riga = [("avviso", f"{tema.simbolo('pausa')} {t('cockpit.in_pausa')}")]
-        elif ist.attiva:
-            stato = [("ok", f"{tema.simbolo('punto')} {t('cockpit.cattura_attiva')}")]
+        avvisi, password = len(ist.avvisi), ist.password_in_chiaro
+        if password:
+            frase: Riga = [("errore", t("testata.password", numero=password))]
+        elif avvisi:
+            frase = [("avviso", t("testata.avvisi", numero=avvisi))]
         else:
-            stato = [("errore", f"{tema.simbolo('vuoto')} {t('cockpit.cattura_ferma')}")]
-        destra: Riga = [("tenue", t("cockpit.router") + " "), ("dati", ist.strada.gateway if ist.strada else "-"),
-                        ("tenue", " · ")] + stato + [("tenue", f" · {ist.pps:.0f} pkt/s ")]
-        spazio = colonne - larghezza_riga(sinistra) - larghezza_riga(destra) - 1
-        if spazio < 1:  # finestra stretta: resta solo lo stato della cattura
-            destra = stato + [("testo", " ")]
-            spazio = colonne - larghezza_riga(sinistra) - larghezza_riga(destra) - 1
+            frase = [("ok", t("testata.tranquillo"))]
+        sinistra: Riga = [("accento", f"{tema.simbolo('gufo')} strinix"), ("tenue", " · ")] + frase
+        nome = ist.interfaccia.nome if ist.interfaccia else "-"
+        if self.pausa:
+            destra: Riga = [("avviso", f"{tema.simbolo('pausa')} {t('cockpit.in_pausa')}")]
+        elif ist.attiva:
+            destra = [("tenue", t("cockpit.in_ascolto") + " "), ("ok", nome)]
+        else:
+            destra = [("errore", t("cockpit.cattura_ferma"))]
+        prima = self._allinea(sinistra, destra, colonne)
+        adesso = time.time()
+        online = sum(d.online(adesso) for d in ist.dispositivi)
+        numeri: Riga = [("testo", " "), ("testo", str(len(ist.dispositivi))), ("tenue", " " + t("testata.dispositivi") + "  "),
+                        ("ok", str(online)), ("tenue", " " + t("testata.online") + "  "),
+                        ("avviso" if avvisi else "tenue", str(avvisi)), ("tenue", " " + t("testata.n_avvisi") + "  "),
+                        ("errore" if password else ("avviso" if ist.chiaro else "tenue"), str(len(ist.chiaro))),
+                        ("tenue", " " + t("testata.in_chiaro") + "  "),
+                        ("tenue", t("cockpit.router") + " "), ("dati", ist.strada.gateway if ist.strada else "-"),
+                        ("tenue", f"  {ist.pps:.0f} pkt/s ")]
+        spazio = colonne - larghezza_riga(numeri) - 1
+        if spazio >= 12 and ist.storia_pps:
+            numeri.append(("dati", self._grafico(ist.storia_pps, min(spazio, 60))))
+        return prima, numeri
+
+    def _grafico(self, valori: tuple[int, ...], colonne: int) -> str:
+        """Un piccolo grafico a barre dell'attivita' (gli ultimi secondi a destra)."""
+        valori = valori[-colonne:]
+        massimo = max(valori) or 1
+        blocchi = BLOCCHI if self.tema.unicode else BLOCCHI_ASCII
+        return "".join(" " if v == 0 else blocchi[min(len(blocchi) - 1, v * len(blocchi) // (massimo + 1))]
+                       for v in valori)
+
+    def _allinea(self, sinistra: Riga, destra: Riga, colonne: int) -> Riga:
+        spazio = colonne - larghezza_riga(sinistra) - larghezza_riga(destra) - 2
         if spazio < 1:
             return [("testo", " ")] + sinistra
         return [("testo", " ")] + sinistra + [("testo", " " * spazio)] + destra
 
     def _schede(self, colonne: int) -> Riga:
-        """Le schede dei pannelli; se non ci stanno, solo i numeri e il nome di quella aperta."""
+        """Le schede dei pannelli (a tutto schermo o su finestre strette), come in Erinix."""
         for compatte in (False, True):
             riga: Riga = [("testo", " ")]
             for n, nome in enumerate(PANNELLI):
                 if n == self.pannello:
-                    riga.append(("accento", f"[{n + 1} {t('pannello.' + nome)}]"))
+                    riga.append(("accento", f"{n + 1} {t('pannello.' + nome)}"))
                 else:
-                    riga.append(("tenue", f" {n + 1} " if compatte else f" {n + 1} {t('pannello.' + nome)} "))
-                riga.append(("testo", " " if compatte else "  "))
+                    riga.append(("tenue", f"{n + 1}" if compatte else f"{n + 1} {t('pannello.' + nome)}"))
+                riga.append(("testo", "  " if compatte else "   "))
             if larghezza_riga(riga) <= colonne:
                 return riga
         return riga
 
     def _piede(self, colonne: int) -> tuple[Riga, Riga]:
-        """Le ultime due righe: suggerimento e tasti (oppure la riga dove scrivi)."""
+        """Le ultime due righe: un suggerimento e i tasti che servono adesso (oppure la riga dove scrivi)."""
         tema = self.tema
         if self.modo == "comando":
             comando, _ = self.registro.trova(self.buffer.split())
@@ -600,10 +742,14 @@ class Cockpit:
             messaggio = [("tenue", " " + t("cockpit.filtro_attivo"))]
         else:
             messaggio = [("tenue", " " + t("cockpit.dove_scrivo"))]
-        tasti_aiuto = "cockpit.tasti_sovrapposto" if self.sovrapposto else (
-            "cockpit.tasti_intero" if self.intero else "cockpit.tasti")
+        if self.sovrapposto:
+            chiave = "cockpit.tasti_pagina"
+        elif self.intero:
+            chiave = "cockpit.tasti_intero_dispositivi" if PANNELLI[self.pannello] == "dispositivi" else "cockpit.tasti_intero"
+        else:
+            chiave = "cockpit.tasti"
         riga: Riga = [("testo", " ")]
-        for n, coppia in enumerate(t(tasti_aiuto).split("  ")):   # quando non c'e' posto si fermano, mai a meta'
+        for n, coppia in enumerate(t(chiave).split("  ")):   # quando non c'e' posto si fermano, mai a meta'
             tasto, _, cosa = coppia.partition(" ")
             pezzi: Riga = [("testo", "   " if n else ""), ("accento", tasto), ("tenue", f" {cosa}")]
             if larghezza_riga(riga) + larghezza_riga(pezzi) > colonne:
@@ -611,80 +757,30 @@ class Cockpit:
             riga += pezzi
         return messaggio, riga
 
-    def _sovrapponi(self, corpo: list[Riga], colonne: int) -> list[Riga]:
-        assert self.sovrapposto is not None
-        titolo, righe = self.sovrapposto
-        larg = min(colonne - 4, 84)
-        alt = min(len(corpo), len(righe) + 2)
-        self.scorri_sovr = max(0, min(self.scorri_sovr, max(0, len(righe) - (alt - 2))))
-        box = self._riquadro(titolo, righe[self.scorri_sovr:], larg, alt)
-        sinistra = (colonne - larg) // 2
-        for n, riga in enumerate(box):
-            corpo[n] = [("testo", " " * sinistra)] + riga
-        return corpo
-
-    def _altezza_naturale(self, ist: Istantanea, nome: str, colonne: int) -> int:
-        """Quante righe servono davvero al pannello (contenuto + bordi)."""
-        return max(1, len(self.voci(ist, nome, colonne - 4))) + 2
-
-    def _altezza_avvolta(self, ist: Istantanea, nome: str, colonne: int) -> int:
-        """Come _altezza_naturale, ma per un pannello stretto in cui le righe vanno a capo."""
-        return sum(len(avvolgi(r, colonne - 4, rientro=9)) for r, _ in self.voci(ist, nome)) + 2
-
-    def _impagina(self, ist: Istantanea, colonne: int, altezza: int) -> list[Riga]:
-        """Divide lo spazio: ogni pannello prende quello che gli serve, il resto va a un altro pannello utile."""
-        attivo = PANNELLI[self.pannello]
-        if self.intero:
-            return self._pannello(ist, attivo, colonne, altezza, True)
-        largo = colonne >= SCHERMO_LARGO
-        dx = max(LATERALE, min(56, colonne // 3)) if largo else 0
-        sx = colonne - dx - 1 if largo else colonne
-        # a sinistra: il pannello aperto e, se avanza spazio, Live sotto
-        secondario = None
-        alt_att = altezza
-        naturale = self._altezza_naturale(ist, attivo, sx)
-        if attivo not in ("live", "avvisi") and naturale <= altezza - MIN_SECONDARIO:
-            alt_att = max(naturale, MIN_SECONDARIO)
-            secondario = "live"
-        sinistra = self._pannello(ist, attivo, sx, alt_att, True)
-        if secondario:
-            sinistra += self._pannello(ist, secondario, sx, altezza - alt_att, False)
-        if not largo:
-            return sinistra
-        # a destra, dall'alto: gli avvisi (solo se ci sono), un pannello che riempie, la Rete in fondo
-        usati = {attivo, secondario}
-        pezzi: list[tuple[str, int | None]] = []
-        if ist.avvisi and "avvisi" not in usati:
-            pezzi.append(("avvisi", min(self._altezza_avvolta(ist, "avvisi", dx), max(MIN_SECONDARIO, altezza // 3))))
-        pezzi.append(("dispositivi" if "dispositivi" not in usati else "riepilogo", None))
-        if "rete" not in usati:
-            pezzi.append(("rete", len(self._righe_rete(ist, breve=True)) + 2))
-        fissi = sum(h for _, h in pezzi if h)
-        while fissi > altezza - MIN_SECONDARIO and len(pezzi) > 1:     # finestra bassa: si toglie dall'alto
-            nome, h = pezzi.pop(0) if pezzi[0][1] else pezzi.pop()
-            fissi -= h or 0
-        destra: list[Riga] = []
-        for nome, h in pezzi:
-            destra += self._pannello(ist, nome, dx, h or (altezza - fissi), False, compatto=True)
-        return [sinistra[n] + [("testo", " ")] + destra[n] for n in range(altezza)]
-
     def righe(self, colonne: int, altezza: int) -> list[str]:
         """Disegna tutto lo schermo: una stringa per riga, ognuna larga esattamente `colonne`."""
         ist = self.istantanea()
-        alt_corpo = max(3, altezza - 5)
-        corpo = self._impagina(ist, colonne, alt_corpo)
+        prima, numeri = self._testata(ist, colonne)
+        panoramica = colonne >= SCHERMO_LARGO and altezza >= ALTEZZA_MINIMA and not self.intero and not self.sovrapposto
+        testa = [prima, numeri] if panoramica else [prima, numeri, self._schede(colonne)]
+        alt_corpo = max(3, altezza - len(testa) - 2)
         if self.sovrapposto is not None:
-            corpo = self._sovrapponi(corpo, colonne)
+            corpo = self._pagina(colonne, alt_corpo)
+        elif panoramica:
+            corpo = self._panoramica(ist, colonne, alt_corpo)
+            if PANNELLI[self.pannello] in self._nascosti:   # il pannello scelto non ci sta: a tutto schermo
+                self.intero = True
+                return self.righe(colonne, altezza)
+        else:
+            corpo = self._pannello(ist, PANNELLI[self.pannello], colonne, alt_corpo, True, completo=True)
         messaggio, piede = self._piede(colonne)
-        tutte = [self._testata(ist, colonne), self._schede(colonne), [("testo", "")], *corpo, messaggio, piede]
+        tutte = [*testa, *corpo, messaggio, piede]
         tutte = tutte[:altezza] + [[("testo", "")]] * max(0, altezza - len(tutte))
-        return [componi(r, self.tema, colonne, "sfondo") for r in tutte]
+        return [componi(r, self.tema, colonne) for r in tutte]
 
 
-def taglia_testa(testo: str, spazio: int, riempi: str) -> str:
-    if larghezza(testo) >= spazio:
-        return testo[:spazio]
-    return testo + riempi * (spazio - larghezza(testo))
+MAX_COMANDO = 200
+CAMPI_MOSTRATI = ("mac", "ip", "prima", "ora", "nome", "chi", "dove", "ip_dove", "servizio", "protocollo", "produttore")
 
 
 def esegui(cockpit: Cockpit, fd_in: int, out) -> int:

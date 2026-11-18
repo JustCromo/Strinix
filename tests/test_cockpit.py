@@ -111,54 +111,63 @@ class TestDisegno(unittest.TestCase):
             self.assertNotIn("\x1b[2J", testo)
             self.assertNotIn("\u202e", testo)
 
-    def test_rete_non_si_ripete(self):
-        c = self.cockpit()
-        for colonne in (100, 140, 220):
-            for n, nome in enumerate(PANNELLI):
-                c.pannello = n
-                schermo = "".join(visibile(r) for r in c.righe(colonne, 40))
-                with self.subTest(colonne=colonne, pannello=nome):
-                    self.assertEqual(schermo.count("─ Rete "), 1)
-                    self.assertLessEqual(schermo.count("─ Dispositivi"), 1)
-
-    def test_nessun_pannello_doppio(self):
+    def test_panoramica_tutti_i_pannelli_una_volta(self):
         c = self.cockpit(FontaAffollata())
-        for colonne, righe in ((80, 24), (100, 30), (160, 40), (205, 48), (260, 70)):
+        for colonne, righe in ((100, 30), (140, 36), (205, 48), (260, 70)):
             for n in range(len(PANNELLI)):
-                c.pannello = n
+                c.pannello, c.intero = n, False
                 schermo = "".join(visibile(r) for r in c.righe(colonne, righe))
-                for nome in ("Avvisi", "Live", "Dispositivi", "In chiaro", "Rete", "Riepilogo"):
-                    with self.subTest(colonne=colonne, pannello=PANNELLI[n], titolo=nome):
-                        self.assertLessEqual(schermo.count(f"─ {nome} "), 1)
+                for k, nome in enumerate(("Avvisi", "Live", "Dispositivi", "In chiaro", "Rete")):
+                    with self.subTest(colonne=colonne, attivo=PANNELLI[n], titolo=nome):
+                        self.assertEqual(schermo.count(f"─ {k + 1} {nome}"), 1)
 
-    def test_spazio_usato_bene(self):
+    def test_finestra_bassa_nasconde_e_apre_a_tutto_schermo(self):
         c = self.cockpit(FontaAffollata())
+        c.pannello = PANNELLI.index("chiaro")
+        schermo = "".join(visibile(r) for r in c.righe(100, 24))
+        self.assertTrue(c.intero)
+        self.assertIn("─ 4 In chiaro", schermo)
+
+    def test_lo_sfondo_del_terminale_resta_visibile(self):
+        c = self.cockpit(tema=tm.Tema(tm.TRUECOLOR, True))
+        for r in c.righe(205, 48):
+            self.assertNotIn("\x1b[48;", r)
+
+    def test_bordo_del_pannello_attivo_colorato(self):
+        tema = tm.Tema(tm.TRUECOLOR, True)
+        c = self.cockpit(tema=tema)
         c.pannello = PANNELLI.index("dispositivi")
-        schermo = "".join(visibile(r) for r in c.righe(205, 48))
-        self.assertIn("─ Live ", schermo)          # sotto i dispositivi, dove prima c'era il vuoto
-        self.assertIn("─ Riepilogo ", schermo)     # a destra, sopra la rete
-        self.assertIn("github.com", schermo)       # colonna "si collega a"
-        c.pannello = PANNELLI.index("live")
-        schermo = "".join(visibile(r) for r in c.righe(205, 48))
-        self.assertIn("─ Dispositivi", schermo)
+        riga = next(r for r in c.righe(205, 48) if "3 Dispositivi" in visibile(r))
+        sinistra, destra = riga.split("3 Dispositivi")[0].rsplit("┌", 1)[0], riga
+        self.assertIn(tema.sgr_testo("accento") + "┌", destra)          # Dispositivi: bordo ambra
+        self.assertIn(tema.sgr_testo("bordo") + "┌", sinistra)          # Avvisi: bordo normale
 
-    def test_colonna_di_destra_mai_tagliata(self):
+    def test_finestra_stretta_un_pannello_alla_volta(self):
         c = self.cockpit(FontaAffollata())
-        for colonne in (100, 120, 160, 205, 260):
-            for n in range(len(PANNELLI)):
-                c.pannello = n
-                for riga in c.righe(colonne, 40)[3:-2]:
-                    destra = visibile(riga)[-max(40, min(56, colonne // 3)):]
-                    with self.subTest(colonne=colonne, pannello=PANNELLI[n]):
-                        self.assertNotIn("…", destra, destra)
+        schermo = "".join(visibile(r) for r in c.righe(80, 24))
+        self.assertEqual(schermo.count("─ "), 1)
+        self.assertIn("2 Live", schermo)            # la riga delle schede
 
-    def test_pannello_principale_si_adatta(self):
+    def test_dispositivi_mai_tagliati_nella_panoramica(self):
         c = self.cockpit(FontaAffollata())
-        c.pannello = 2
-        for colonne in (60, 80, 100):
-            testo = "".join(visibile(r) for r in c.righe(colonne, 40))
+        for colonne in (140, 205, 260):
+            schermo = [visibile(r) for r in c.righe(colonne, 48)]
+            for riga in schermo:
+                if "192.168.50." in riga:
+                    self.assertNotIn("…", riga[colonne * 55 // 100:])
+
+    def test_pagina_di_dettaglio_va_a_capo(self):
+        c = self.cockpit()
+        c.tasto("invio")
+        c.tasto("invio")                             # Avvisi -> a tutto schermo -> pagina
+        for colonne in (50, 80, 205):
+            righe = [visibile(r) for r in c.righe(colonne, 60)]
+            testo = "".join(righe)
             with self.subTest(colonne=colonne):
-                self.assertNotIn("…", testo.replace("puntini", ""))
+                self.assertIn("Cosa fare", testo)
+                self.assertIn("Cosa significa", testo)
+                corpo = righe[4:-3]
+                self.assertFalse(any("…" in r for r in corpo), corpo)
 
     def test_ascii(self):
         c = self.cockpit(tema=tm.Tema(tm.NESSUNO, False))
@@ -182,9 +191,9 @@ class TestTastiCockpit(unittest.TestCase):
 
     def test_pannelli(self):
         self.scrivi("\t")
-        self.assertEqual(PANNELLI[self.c.pannello], "dispositivi")
+        self.assertEqual(PANNELLI[self.c.pannello], "live")
         self.scrivi("\x1b[Z\x1b[Z")
-        self.assertEqual(PANNELLI[self.c.pannello], "avvisi")
+        self.assertEqual(PANNELLI[self.c.pannello], "rete")
         self.scrivi("4")
         self.assertEqual(PANNELLI[self.c.pannello], "chiaro")
         self.scrivi("5")
@@ -222,7 +231,7 @@ class TestTastiCockpit(unittest.TestCase):
         self.assertEqual(self.c.buffer, "")
 
     def test_cerca_filtra(self):
-        self.scrivi("/github\r")
+        self.scrivi("2/github\r")
         voci = self.c.voci(self.c.istantanea(), "live")
         self.assertEqual(len(voci), 1)
         self.scrivi("\x1b")

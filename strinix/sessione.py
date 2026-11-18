@@ -21,6 +21,7 @@ from strinix.stato import Dispositivo, Evento, InChiaro, Memoria
 
 MAX_EVENTI = 2000
 FINESTRA_PPS = 5  # secondi su cui si calcolano i pacchetti al secondo
+STORIA_PPS = 60   # secondi di storia per il grafico dell'attivita' nella testata
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class Istantanea:
     etichette: dict = field(default_factory=dict)   # MAC -> etichetta (router, questo_computer...)
     dns_in_chiaro_mio: int = 0
     chiaro: tuple[InChiaro, ...] = ()               # protocolli non cifrati visti (mai il contenuto)
+    storia_pps: tuple[int, ...] = ()                # pacchetti al secondo, gli ultimi 60 secondi
 
     @property
     def avvisi(self) -> tuple[Evento, ...]:
@@ -74,7 +76,7 @@ class Sessione:
         self._thread: threading.Thread | None = None
         self._cattura: Cattura | None = None
         self.pacchetti = self.illeggibili = 0
-        self._secondi: deque[list[int]] = deque(maxlen=FINESTRA_PPS + 1)   # [secondo, pacchetti]
+        self._secondi: deque[list[int]] = deque(maxlen=STORIA_PPS + 1)   # [secondo, pacchetti]
         self.attiva = False
         self.errore: tuple[str, dict] | None = None
         self.inizio = time.time()
@@ -128,6 +130,11 @@ class Sessione:
         totale = sum(n for s, n in self._secondi if corrente - FINESTRA_PPS <= s < corrente)
         return totale / FINESTRA_PPS
 
+    def _storia(self, adesso: float) -> tuple[int, ...]:
+        corrente = int(adesso)
+        per_secondo = {s: n for s, n in self._secondi}
+        return tuple(per_secondo.get(s, 0) for s in range(corrente - STORIA_PPS, corrente))
+
     def istantanea(self) -> Istantanea:
         with self._lock:
             # copie vere (anche dei dizionari dentro): il cockpit non puo' toccare la memoria viva
@@ -140,6 +147,7 @@ class Sessione:
                 etichette={d.mac: self.memoria.etichetta(d.mac) for d in schede},
                 dns_in_chiaro_mio=self.memoria.dns_in_chiaro_mio,
                 chiaro=tuple(replace(c) for c in self.memoria.chiaro.values()),
+                storia_pps=self._storia(time.time()),
             )
 
     def ferma(self) -> None:

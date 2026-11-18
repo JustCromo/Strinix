@@ -69,29 +69,36 @@ opzione sbagliati (con il suggerimento "intendevi...?").
 
 ### Il cockpit
 
-Cinque pannelli:
+Funziona come quello di Erinix, su tre livelli:
+
+1. **la panoramica**: tutti i pannelli insieme, numerati. Quello scelto ha il
+   bordo color ambra. A sinistra **1 Avvisi** e **2 Live**, a destra
+   **3 Dispositivi**, **4 In chiaro** e **5 Rete**;
+2. **Invio**: il pannello scelto a tutto schermo, con più colonne;
+3. **Invio di nuovo**: la pagina della riga scelta, con *Cosa significa*,
+   *Cosa fare*, i dettagli e *Cosa è successo*. Il testo va a capo e si scorre
+   con le frecce.
 
 | Pannello | Cosa mostra |
 |---|---|
-| **Avvisi** | le cose da controllare: un IP che cambia proprietario, password in chiaro |
-| **Live** | cosa succede: chi si collega a cosa (`questo computer → github.com (HTTPS)`), ricerche DNS, dispositivi nuovi e i loro nomi |
-| **Dispositivi** | una scheda per ogni apparecchio: nome, produttore, IP, MAC, traffico, se è online |
-| **In chiaro** | i servizi usati senza cifratura (HTTP, FTP, Telnet, posta) e se è passata una password |
-| **Rete** | la tua scheda, il router, la cattura, il DNS cifrato |
+| **1 Avvisi** | le cose da controllare: un IP che cambia proprietario, password in chiaro |
+| **2 Live** | cosa succede: chi si collega a cosa (`questo computer → github.com · HTTPS`), ricerche DNS, dispositivi nuovi e i loro nomi |
+| **3 Dispositivi** | una scheda per ogni apparecchio: nome, produttore, IP, MAC, traffico, se è online, a cosa si collega |
+| **4 In chiaro** | i servizi usati senza cifratura (HTTP, FTP, Telnet, posta) e se è passata una password |
+| **5 Rete** | la tua scheda, il router, la cattura, il DNS cifrato; a tutto schermo anche chi usa di più la rete e i siti più usati |
 
-Lo spazio si divide da solo: ogni pannello prende l'altezza che gli serve e
-quello che avanza va a un altro pannello utile (per esempio Live sotto
-Dispositivi). Su uno schermo largo, a destra ci sono gli avvisi (se ce ne
-sono), i dispositivi o un **riepilogo** (chi usa di più la rete, i siti più
-usati) e in fondo la rete. Nei pannelli che si guardano soltanto, le righe
-lunghe vanno a capo invece di essere tagliate.
+In alto, due righe: una frase sulla situazione ("tutto tranquillo", "2 cose
+da controllare", "1 password in chiaro!") e i numeri principali con il grafico
+dell'attività dell'ultimo minuto. Lo sfondo non viene dipinto: resta quello
+del tuo terminale. Sulle finestre strette o basse si vede un pannello alla
+volta, con le schede in alto.
 
 | Tasto | Cosa fa |
 |---|---|
 | `:` | scrivi un comando (Tab completa, ↑ ↓ cronologia) |
 | Tab, Maiusc+Tab, `1`-`5` | cambia pannello |
 | ↑ ↓, PgSu PgGiù | scegli una riga |
-| Invio | schermo intero, poi apre i dettagli della riga |
+| Invio | a tutto schermo, poi la pagina della riga scelta |
 | `c` | copia la riga scelta negli appunti |
 | `o` | ordina i dispositivi: comparsa, traffico, nome, IP |
 | `/` | cerca nel pannello |
