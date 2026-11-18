@@ -121,6 +121,27 @@ class TestDisegno(unittest.TestCase):
                     self.assertEqual(schermo.count("─ Rete "), 1)
                     self.assertLessEqual(schermo.count("─ Dispositivi"), 1)
 
+    def test_nessun_pannello_doppio(self):
+        c = self.cockpit(FontaAffollata())
+        for colonne, righe in ((80, 24), (100, 30), (160, 40), (205, 48), (260, 70)):
+            for n in range(len(PANNELLI)):
+                c.pannello = n
+                schermo = "".join(visibile(r) for r in c.righe(colonne, righe))
+                for nome in ("Avvisi", "Live", "Dispositivi", "In chiaro", "Rete", "Riepilogo"):
+                    with self.subTest(colonne=colonne, pannello=PANNELLI[n], titolo=nome):
+                        self.assertLessEqual(schermo.count(f"─ {nome} "), 1)
+
+    def test_spazio_usato_bene(self):
+        c = self.cockpit(FontaAffollata())
+        c.pannello = PANNELLI.index("dispositivi")
+        schermo = "".join(visibile(r) for r in c.righe(205, 48))
+        self.assertIn("─ Live ", schermo)          # sotto i dispositivi, dove prima c'era il vuoto
+        self.assertIn("─ Riepilogo ", schermo)     # a destra, sopra la rete
+        self.assertIn("github.com", schermo)       # colonna "si collega a"
+        c.pannello = PANNELLI.index("live")
+        schermo = "".join(visibile(r) for r in c.righe(205, 48))
+        self.assertIn("─ Dispositivi", schermo)
+
     def test_colonna_di_destra_mai_tagliata(self):
         c = self.cockpit(FontaAffollata())
         for colonne in (100, 120, 160, 205, 260):

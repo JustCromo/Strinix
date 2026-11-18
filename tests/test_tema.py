@@ -2,7 +2,7 @@ import io
 import unittest
 
 from strinix.ui import tema as tm
-from strinix.ui.testo import adatta, componi, larghezza, larghezza_riga, taglia
+from strinix.ui.testo import adatta, avvolgi, componi, larghezza, larghezza_riga, taglia
 
 
 class FintoTerminale(io.StringIO):
@@ -79,6 +79,21 @@ class TestTesto(unittest.TestCase):
         for colonne in (1, 5, 40):
             riga = adatta([("testo", "x" * 100), ("dati", "日本" * 30)], colonne)
             self.assertEqual(larghezza_riga(riga), colonne)
+
+    def test_avvolgi(self):
+        riga = [("tenue", "15:07:29 "), ("avviso", "L'indirizzo 192.168.1.254 prima era di 60:d8:a4:25:bb:5b, ora lo "
+                                                   "dichiara de:ad:be:ef:00:01. Può essere normale, ma è anche il segno")]
+        for colonne in (20, 33, 50, 80):
+            righe = avvolgi(riga, colonne, rientro=9)
+            with self.subTest(colonne=colonne):
+                for r in righe:
+                    self.assertLessEqual(larghezza_riga(r), colonne + 1)
+                for r in righe[1:]:
+                    testo = "".join(x for _, x in r)
+                    self.assertTrue(testo.startswith(" " * 9) and testo[9] != " ", repr(testo))
+        lunga = avvolgi([("testo", "x" * 100)], 30, rientro=2)
+        self.assertGreater(len(lunga), 3)
+        self.assertEqual(avvolgi([("testo", "corta")], 30), [[("testo", "corta")]])
 
     def test_componi_ripulisce(self):
         s = componi([("testo", "ciao\x1b[2J\x1b]0;x\x07")], tm.Tema(tm.NESSUNO), 30)

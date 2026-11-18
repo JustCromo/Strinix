@@ -6,6 +6,7 @@ lo taglia alla larghezza disponibile e aggiunge i colori del tema.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 
 from strinix.terminale import pulisci
@@ -85,3 +86,31 @@ def componi(riga: Riga, tema: Tema, colonne: int | None = None, sfondo: str | No
         return "".join(t for _, t in pezzi)
     bg = tema.sgr_sfondo(sfondo) if sfondo else ""
     return "".join(f"{bg}{tema.sgr_testo(r)}{t}" for r, t in pezzi) + "\x1b[0m"
+
+
+def avvolgi(riga: Riga, colonne: int, rientro: int = 0) -> list[Riga]:
+    """Manda a capo una riga troppo lunga tra una parola e l'altra (le righe dopo la prima rientrano)."""
+    if colonne <= rientro + 4 or larghezza_riga(riga) <= colonne:
+        return [riga]
+    righe: list[Riga] = [[]]
+    usate = 0
+    for ruolo, testo in pulita(riga):
+        for parola in re.findall(r"\S+\s*|\s+", testo):
+            w = larghezza(parola)
+            if usate + larghezza(parola.rstrip()) > colonne and usate > rientro:
+                righe.append([("testo", " " * rientro)])
+                usate = rientro
+                parola = parola.lstrip()
+                w = larghezza(parola)
+            if w > colonne - usate and larghezza(parola.rstrip()) <= colonne - usate:
+                parola = parola.rstrip()          # lo spazio dopo l'ultima parola non va a capo
+                w = larghezza(parola)
+            while w > colonne - usate:            # parola piu' lunga della riga: si spezza
+                spazio = colonne - usate
+                righe[-1].append((ruolo, parola[:spazio]))
+                righe.append([("testo", " " * rientro)])
+                usate, parola = rientro, parola[spazio:]
+                w = larghezza(parola)
+            righe[-1].append((ruolo, parola))
+            usate += w
+    return righe

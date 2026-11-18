@@ -25,13 +25,15 @@ from strinix.stato import Dispositivo, Evento, InChiaro
 from strinix.terminale import pulisci
 from strinix.tui.schermo import Schermo, tasti
 from strinix.ui import tema as tm
-from strinix.ui.testo import Riga, adatta, componi, larghezza, larghezza_riga, taglia
+from strinix.ui.testo import Riga, adatta, avvolgi, componi, larghezza, larghezza_riga, taglia
 
 PANNELLI = ("avvisi", "live", "dispositivi", "chiaro", "rete")
+LATERALI = ("riepilogo",)                          # pannelli che compaiono solo nella colonna di destra
 ORDINI = ("comparsa", "traffico", "nome", "ip")     # come si possono ordinare i dispositivi (tasto o)
 RUOLO_LIVELLO = {"info": "testo", "avviso": "avviso", "grave": "errore"}
 SIMBOLO_LIVELLO = {"info": "punto", "avviso": "avviso", "grave": "errore"}
 MAX_NOME_COLONNA = 28
+MIN_SECONDARIO = 8    # sotto questa altezza un pannello in piu' non vale la pena
 NOTIFICA = 3.0        # secondi in cui resta visibile un messaggio come "copiato"
 LATERALE = 40          # larghezza minima della colonna di destra sugli schermi larghi
 SCHERMO_LARGO = 100
@@ -74,9 +76,9 @@ class Cockpit:
                  prima_volta: bool = False) -> None:
         self.registro, self.tema, self.fonte = registro, tema, fonte
         self.pannello = 1
-        self.selezione = {p: 0 for p in PANNELLI}
+        self.selezione = {p: 0 for p in PANNELLI + LATERALI}
         self.segui_live = True
-        self.filtro = {p: "" for p in PANNELLI}
+        self.filtro = {p: "" for p in PANNELLI + LATERALI}
         self.intero = False
         self.pausa = False
         self._congelata: Istantanea | None = None
@@ -119,6 +121,8 @@ class Cockpit:
             voci = self._voci_dispositivi(ist, spazio, compatto=breve)
         elif pannello == "chiaro":
             voci = self._voci_chiaro(ist)
+        elif pannello == "riepilogo":
+            voci = self._voci_riepilogo(ist, spazio)
         else:
             righe = self._righe_rete(ist, breve=breve)
             etichetta = max(larghezza(t(k)) for k, _, _ in righe) + 2
@@ -129,12 +133,14 @@ class Cockpit:
             voci = [(r, o) for r, o in voci if filtro in "".join(x for _, x in r).lower()]
         return voci
 
-    def nome_mostrato(self, ist: Istantanea, d: Dispositivo) -> str:
+    def nome_mostrato(self, ist: Istantanea, d: Dispositivo, breve: bool = False) -> str:
         """Il nome piu' utile per una persona: quello dichiarato, poi il ruolo, poi il produttore."""
         tipo = ist.etichette.get(d.mac, "nessuna")
         if d.nome:
             return d.nome
         if tipo in ("questo_computer", "router"):
+            if breve:
+                return t("tipo_breve." + tipo)
             return t("tipo." + tipo) + (f" · {d.produttore}" if d.produttore else "")
         if d.produttore:
             return d.produttore
@@ -156,7 +162,7 @@ class Cockpit:
         if not schede:
             return []
         adesso = time.time()
-        nomi = {d.mac: self.nome_mostrato(ist, d) for d in schede}
+        nomi = {d.mac: self.nome_mostrato(ist, d, breve=compatto) for d in schede}
         su, giu = ("↑", "↓") if self.tema.unicode else ("^", "v")
         traffico = {d.mac: f"{su} {_byte(d.byte_inviati)}  {giu} {_byte(d.byte_ricevuti)}" for d in schede}
         ultima = {d.mac: _fa(adesso - d.ultimo) for d in schede}
@@ -167,6 +173,8 @@ class Cockpit:
             "traffico": max(larghezza(x) for x in traffico.values()),
             "ultima": max(larghezza(x) for x in ultima.values()),
         }
+        if compatto and spazio is not None and spazio - 2 - larghe["ip"] - 2 >= 8:
+            larghe["nome"] = min(larghe["nome"], spazio - 2 - larghe["ip"] - 2)   # nome e IP devono starci tutti e due
         # le colonne entrano in ordine di importanza finche' c'e' posto; poi si mostrano in ordine di lettura
         priorita = ("nome", "ip") if compatto else ("nome", "ip", "ultima", "traffico", "mac")
         scelte, usato = [], 2
@@ -180,6 +188,10 @@ class Cockpit:
                 continue
             scelte.append(col)
             usato += serve
+        resto = (spazio - usato - 2) if spazio is not None else 0
+        if not compatto and resto >= 20 and any(d.destinazioni for d in schede):
+            scelte.append("dest")
+            larghe["dest"] = resto
         voci = []
         for d in schede:
             tipo = ist.etichette.get(d.mac, "nessuna")
@@ -190,13 +202,39 @@ class Cockpit:
                      "ip": ("testo", (d.ip or "-").ljust(larghe["ip"])),
                      "mac": ("dati", d.mac),
                      "traffico": ("tenue", traffico[d.mac].ljust(larghe["traffico"])),
-                     "ultima": ("tenue", ultima[d.mac].ljust(larghe["ultima"]))}
+                     "ultima": ("tenue", ultima[d.mac].ljust(larghe["ultima"])),
+                     "dest": ("dati", taglia(", ".join(x for x, _ in sorted(d.destinazioni.items(), key=lambda v: -v[1])),
+                                             larghe.get("dest", 0)))}
             primo = True
-            for col in ("nome", "ip", "mac", "traffico", "ultima"):
+            for col in ("nome", "ip", "mac", "traffico", "ultima", "dest"):
                 if col in scelte:
                     riga.append((celle[col][0], ("" if primo else "  ") + celle[col][1]))
                     primo = False
             voci.append((riga, d))
+        return voci
+
+    def _voci_riepilogo(self, ist: Istantanea, spazio: int | None) -> list[tuple[Riga, object]]:
+        """Chi usa di piu' la rete e i siti piu' visitati: per riempire lo spazio con qualcosa di utile."""
+        voci: list[tuple[Riga, object]] = []
+        attivi = sorted(ist.dispositivi, key=lambda d: -(d.byte_inviati + d.byte_ricevuti))
+        attivi = [d for d in attivi if d.byte_inviati + d.byte_ricevuti > 0][:6]
+        if attivi:
+            voci.append(([("dati", t("riepilogo.piu_attivi"))], None))
+            larg = (spazio or 40) - 12
+            for d in attivi:
+                nome = taglia(self.nome_mostrato(ist, d), larg).ljust(larg)
+                voci.append(([("testo", nome), ("tenue", f"{_byte(d.byte_inviati + d.byte_ricevuti):>10}")], None))
+        siti: dict[str, int] = {}
+        for d in ist.dispositivi:
+            for dove, volte in d.destinazioni.items():
+                siti[dove] = siti.get(dove, 0) + volte
+        if siti:
+            if voci:
+                voci.append(([("testo", "")], None))
+            voci.append(([("dati", t("riepilogo.siti"))], None))
+            larg = (spazio or 40) - 8
+            for dove, volte in sorted(siti.items(), key=lambda x: -x[1])[:8]:
+                voci.append(([("testo", taglia(dove, larg).ljust(larg)), ("tenue", f"{'×' + str(volte):>6}")], None))
         return voci
 
     def _voci_chiaro(self, ist: Istantanea) -> list[tuple[Riga, object]]:
@@ -485,6 +523,10 @@ class Cockpit:
         if sel < inizio:
             inizio = sel
         contenuto = [r for r, _ in voci[inizio:inizio + visibili]]
+        if not attivo and nome in ("live", "avvisi", "chiaro"):
+            # pannello solo da guardare: le righe lunghe vanno a capo invece di essere tagliate
+            avvolte = [x for r, _ in voci for x in avvolgi(r, colonne - 4, rientro=9)]
+            contenuto = avvolte[-visibili:] if nome == "live" else avvolte[:visibili]
         if not voci:
             contenuto = [[("tenue", t("vuoto." + nome) if not self.filtro[nome] else t("vuoto.filtro"))]]
         titolo = t("pannello." + nome)
@@ -581,26 +623,56 @@ class Cockpit:
             corpo[n] = [("testo", " " * sinistra)] + riga
         return corpo
 
+    def _altezza_naturale(self, ist: Istantanea, nome: str, colonne: int) -> int:
+        """Quante righe servono davvero al pannello (contenuto + bordi)."""
+        return max(1, len(self.voci(ist, nome, colonne - 4))) + 2
+
+    def _altezza_avvolta(self, ist: Istantanea, nome: str, colonne: int) -> int:
+        """Come _altezza_naturale, ma per un pannello stretto in cui le righe vanno a capo."""
+        return sum(len(avvolgi(r, colonne - 4, rientro=9)) for r, _ in self.voci(ist, nome)) + 2
+
+    def _impagina(self, ist: Istantanea, colonne: int, altezza: int) -> list[Riga]:
+        """Divide lo spazio: ogni pannello prende quello che gli serve, il resto va a un altro pannello utile."""
+        attivo = PANNELLI[self.pannello]
+        if self.intero:
+            return self._pannello(ist, attivo, colonne, altezza, True)
+        largo = colonne >= SCHERMO_LARGO
+        dx = max(LATERALE, min(56, colonne // 3)) if largo else 0
+        sx = colonne - dx - 1 if largo else colonne
+        # a sinistra: il pannello aperto e, se avanza spazio, Live sotto
+        secondario = None
+        alt_att = altezza
+        naturale = self._altezza_naturale(ist, attivo, sx)
+        if attivo not in ("live", "avvisi") and naturale <= altezza - MIN_SECONDARIO:
+            alt_att = max(naturale, MIN_SECONDARIO)
+            secondario = "live"
+        sinistra = self._pannello(ist, attivo, sx, alt_att, True)
+        if secondario:
+            sinistra += self._pannello(ist, secondario, sx, altezza - alt_att, False)
+        if not largo:
+            return sinistra
+        # a destra, dall'alto: gli avvisi (solo se ci sono), un pannello che riempie, la Rete in fondo
+        usati = {attivo, secondario}
+        pezzi: list[tuple[str, int | None]] = []
+        if ist.avvisi and "avvisi" not in usati:
+            pezzi.append(("avvisi", min(self._altezza_avvolta(ist, "avvisi", dx), max(MIN_SECONDARIO, altezza // 3))))
+        pezzi.append(("dispositivi" if "dispositivi" not in usati else "riepilogo", None))
+        if "rete" not in usati:
+            pezzi.append(("rete", len(self._righe_rete(ist, breve=True)) + 2))
+        fissi = sum(h for _, h in pezzi if h)
+        while fissi > altezza - MIN_SECONDARIO and len(pezzi) > 1:     # finestra bassa: si toglie dall'alto
+            nome, h = pezzi.pop(0) if pezzi[0][1] else pezzi.pop()
+            fissi -= h or 0
+        destra: list[Riga] = []
+        for nome, h in pezzi:
+            destra += self._pannello(ist, nome, dx, h or (altezza - fissi), False, compatto=True)
+        return [sinistra[n] + [("testo", " ")] + destra[n] for n in range(altezza)]
+
     def righe(self, colonne: int, altezza: int) -> list[str]:
         """Disegna tutto lo schermo: una stringa per riga, ognuna larga esattamente `colonne`."""
         ist = self.istantanea()
         alt_corpo = max(3, altezza - 5)
-        attivo = PANNELLI[self.pannello]
-        if colonne >= SCHERMO_LARGO and not self.intero:
-            dx = max(LATERALE, min(56, colonne // 3))
-            sx = colonne - dx - 1
-            principale = self._pannello(ist, attivo, sx, alt_corpo, True)
-            # a destra solo i pannelli che non sono gia' aperti a sinistra
-            laterali = [p for p in ("dispositivi", "rete") if p != attivo]
-            if len(laterali) == 2:
-                alt_dx = alt_corpo - 12 if alt_corpo >= 24 else alt_corpo // 2   # la Rete ha 10 righe fisse
-                laterale = (self._pannello(ist, "dispositivi", dx, alt_dx, False, compatto=True)
-                            + self._pannello(ist, "rete", dx, alt_corpo - alt_dx, False, compatto=True))
-            else:
-                laterale = self._pannello(ist, laterali[0], dx, alt_corpo, False, compatto=True)
-            corpo = [principale[n] + [("testo", " ")] + laterale[n] for n in range(alt_corpo)]
-        else:
-            corpo = self._pannello(ist, attivo, colonne, alt_corpo, True)
+        corpo = self._impagina(ist, colonne, alt_corpo)
         if self.sovrapposto is not None:
             corpo = self._sovrapponi(corpo, colonne)
         messaggio, piede = self._piede(colonne)

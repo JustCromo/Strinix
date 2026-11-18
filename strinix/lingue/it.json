@@ -143,6 +143,7 @@
   "pannello.dispositivi": "Dispositivi",
   "pannello.live": "Live",
   "pannello.rete": "Rete",
+  "pannello.riepilogo": "Riepilogo",
   "rete.cattura": "Cattura",
   "rete.cattura_attiva": "attiva",
   "rete.cattura_ferma": "ferma",
@@ -168,6 +169,8 @@
   "rete.pacchetti": "Pacchetti",
   "rete.router": "Router",
   "rete.router_mac": "MAC del router",
+  "riepilogo.piu_attivi": "Chi usa di più la rete",
+  "riepilogo.siti": "Siti e servizi più usati",
   "stato.ascolto_attivo": "Ascolto attivo: {pacchetti} pacchetti ({pps}/s)",
   "stato.ascolto_spento": "Ascolto non attivo (apri il cockpit con `strinix`, o usa `strinix ascolta`)",
   "stato.interfaccia": "Interfaccia: {nome} (IP {ip})",
@@ -229,5 +232,6 @@
   "vuoto.dispositivi": "Nessun dispositivo visto per ora.",
   "vuoto.filtro": "Niente corrisponde al filtro (Esc lo toglie).",
   "vuoto.live": "In attesa dei primi pacchetti...",
-  "vuoto.rete": "-"
+  "vuoto.rete": "-",
+  "vuoto.riepilogo": "Ancora pochi dati: torna tra qualche secondo."
 }

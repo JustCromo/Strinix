@@ -79,7 +79,12 @@ Cinque pannelli:
 | **In chiaro** | i servizi usati senza cifratura (HTTP, FTP, Telnet, posta) e se è passata una password |
 | **Rete** | la tua scheda, il router, la cattura, il DNS cifrato |
 
-Su uno schermo largo, a destra restano sempre visibili dispositivi e rete.
+Lo spazio si divide da solo: ogni pannello prende l'altezza che gli serve e
+quello che avanza va a un altro pannello utile (per esempio Live sotto
+Dispositivi). Su uno schermo largo, a destra ci sono gli avvisi (se ce ne
+sono), i dispositivi o un **riepilogo** (chi usa di più la rete, i siti più
+usati) e in fondo la rete. Nei pannelli che si guardano soltanto, le righe
+lunghe vanno a capo invece di essere tagliate.
 
 | Tasto | Cosa fa |
 |---|---|

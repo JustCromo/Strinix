@@ -25,6 +25,8 @@ def testo_evento(e: Evento) -> str:
     valori = dict(e.valori)
     if "etichetta" in valori:
         valori["etichetta"] = t("etichetta." + valori["etichetta"])
+    if e.chiave == "evento.nuovo_dispositivo":
+        valori.setdefault("produttore", "")
     if "produttore" in valori:
         valori["produttore"] = f" {valori['produttore']}" if valori["produttore"] else ""
     return t(e.chiave, **valori)
