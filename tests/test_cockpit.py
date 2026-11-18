@@ -14,7 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from strinix.comandi.integrati import crea_registro
-from strinix.stato import Evento
+from strinix.stato import Dispositivo, Evento
 from strinix.tui.cockpit import PANNELLI, Cockpit
 from strinix.tui.schermo import ENTRA, ESCI, tasti
 from strinix.ui import tema as tm
@@ -39,7 +39,21 @@ class FontaOstile(Finta):
         return replace(ist, eventi=ist.eventi + (brutto,))
 
 
+class FontaAffollata(Finta):
+    """Una rete con tanti dispositivi e indirizzi lunghi, come quella vera di casa o dell'ITS."""
+
+    def istantanea(self):
+        ist = super().istantanea()
+        extra = tuple(Dispositivo(f"e8:65:38:51:{i:02x}:c7", ist.inizio + i, ist.inizio + i, 3, f"192.168.50.{100 + i}")
+                      for i in range(16))
+        return replace(ist, dispositivi=ist.dispositivi + extra)
+
+
 class TestTasti(unittest.TestCase):
+    def test_niente_a_capo_automatico(self):
+        self.assertIn("\x1b[?7l", ENTRA)
+        self.assertIn("\x1b[?7h", ESCI)
+
     def test_sequenze(self):
         self.assertEqual(tasti("\x1b[A\x1b[B\x1b[Z\t\r"), ["su", "giu", "maiusc-tab", "tab", "invio"])
         self.assertEqual(tasti("\x1b[5~\x1b[6~\x1bOA"), ["pagsu", "paggiu", "su"])
@@ -80,6 +94,34 @@ class TestDisegno(unittest.TestCase):
             self.assertNotIn("\x1b]", testo)
             self.assertNotIn("\x1b[2J", testo)
             self.assertNotIn("\u202e", testo)
+
+    def test_rete_non_si_ripete(self):
+        c = self.cockpit()
+        for colonne in (100, 140, 220):
+            for n, nome in enumerate(PANNELLI):
+                c.pannello = n
+                schermo = "".join(visibile(r) for r in c.righe(colonne, 40))
+                with self.subTest(colonne=colonne, pannello=nome):
+                    self.assertEqual(schermo.count("─ Rete "), 1)
+                    self.assertLessEqual(schermo.count("─ Dispositivi"), 1)
+
+    def test_colonna_di_destra_mai_tagliata(self):
+        c = self.cockpit(FontaAffollata())
+        for colonne in (100, 120, 160, 205, 260):
+            for n in range(len(PANNELLI)):
+                c.pannello = n
+                for riga in c.righe(colonne, 40)[3:-2]:
+                    destra = visibile(riga)[-max(40, min(56, colonne // 3)):]
+                    with self.subTest(colonne=colonne, pannello=PANNELLI[n]):
+                        self.assertNotIn("…", destra, destra)
+
+    def test_pannello_principale_si_adatta(self):
+        c = self.cockpit(FontaAffollata())
+        c.pannello = 2
+        for colonne in (60, 80, 100):
+            testo = "".join(visibile(r) for r in c.righe(colonne, 40))
+            with self.subTest(colonne=colonne):
+                self.assertNotIn("…", testo.replace("puntini", ""))
 
     def test_ascii(self):
         c = self.cockpit(tema=tm.Tema(tm.NESSUNO, False))

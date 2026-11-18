@@ -12,8 +12,11 @@ import signal
 import termios
 import tty
 
-ENTRA = "\x1b[?1049h\x1b[?25l\x1b[2J"     # schermo alternativo, cursore nascosto, pulisci
-ESCI = "\x1b[0m\x1b[?25h\x1b[?1049l"      # colori normali, cursore visibile, schermo normale
+# schermo alternativo, cursore nascosto, niente "a capo automatico" (una riga troppo lunga
+# viene tagliata invece di far scorrere tutto lo schermo), pulisci
+ENTRA = "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J"
+# colori normali, a capo automatico di nuovo attivo, cursore visibile, schermo normale
+ESCI = "\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l"
 
 _ultimo_segnale: int | None = None
 

@@ -25,7 +25,7 @@ from strinix.ui import tema as tm
 from strinix.ui.testo import Riga, adatta, componi, larghezza, larghezza_riga
 
 PANNELLI = ("avvisi", "live", "dispositivi", "rete")
-LATERALE = 34          # larghezza della colonna di destra sugli schermi larghi
+LATERALE = 40          # larghezza minima della colonna di destra sugli schermi larghi
 SCHERMO_LARGO = 100
 MAX_COMANDO = 200
 
@@ -62,8 +62,13 @@ class Cockpit:
             return self._congelata
         return self.fonte.istantanea()
 
-    def voci(self, ist: Istantanea, pannello: str) -> list[tuple[Riga, object]]:
-        """Le righe del pannello (gia' filtrate) con l'oggetto a cui si riferiscono."""
+    def voci(self, ist: Istantanea, pannello: str, spazio: int | None = None,
+             breve: bool = False) -> list[tuple[Riga, object]]:
+        """Le righe del pannello (gia' filtrate) con l'oggetto a cui si riferiscono.
+
+        `spazio` sono le colonne disponibili: se e' poco le righe diventano compatte
+        invece di essere tagliate a meta'. `breve` accorcia i valori (colonna di destra).
+        """
         tema = self.tema
         voci: list[tuple[Riga, object]] = []
         if pannello in ("live", "avvisi"):
@@ -74,24 +79,51 @@ class Cockpit:
                 voci.append(([("tenue", _ora(e.ora) + " "), ("avviso" if grave else "ok", simbolo + " "),
                               ("avviso" if grave else "testo", testo_evento(e))], e))
         elif pannello == "dispositivi":
-            for d in sorted(ist.dispositivi, key=lambda d: d.primo):
-                tipo = ist.etichette.get(d.mac, "nessuna")
-                voci.append(([("ok", tema.simbolo("punto") + " "), ("dati", d.mac + "  "),
-                              ("testo", f"{(d.ip or '-'):<16}"), ("tenue", f"{t('tipo.' + tipo):<20}"),
-                              ("tenue", _ora(d.primo))], d))
+            voci = self._voci_dispositivi(ist, spazio)
         else:
-            for chiave, valore, ruolo in self._righe_rete(ist):
-                voci.append(([("tenue", f"{t(chiave):<16}"), (ruolo, valore)], None))
+            righe = self._righe_rete(ist, breve=breve)
+            etichetta = max(larghezza(t(k)) for k, _, _ in righe) + 2
+            for chiave, valore, ruolo in righe:
+                voci.append(([("tenue", t(chiave).ljust(etichetta)), (ruolo, valore)], None))
         filtro = self.filtro[pannello].lower()
         if filtro:
             voci = [(r, o) for r, o in voci if filtro in "".join(x for _, x in r).lower()]
         return voci
 
-    def _righe_rete(self, ist: Istantanea) -> list[tuple[str, str, str]]:
+    def _voci_dispositivi(self, ist: Istantanea, spazio: int | None) -> list[tuple[Riga, object]]:
+        schede = sorted(ist.dispositivi, key=lambda d: d.primo)
+        if not schede:
+            return []
+        tipi = {d.mac: ist.etichette.get(d.mac, "nessuna") for d in schede}
+        ip_w = max(len(d.ip or "-") for d in schede)
+        base = 2 + 17 + 2 + ip_w                           # punto, MAC, IP
+        lungo = max(larghezza(t("tipo." + x)) for x in tipi.values())
+        breve = max(larghezza(t("tipo_breve." + x)) for x in tipi.values())
+        if spazio is None or spazio >= base + 2 + lungo + 2 + 8:
+            modo, tipo_w = "tipo.", lungo                   # tutto: tipo per esteso e ora
+        elif spazio >= base + 2 + breve:
+            modo, tipo_w = "tipo_breve.", breve             # compatto: tipo abbreviato, niente ora
+        else:
+            modo, tipo_w = None, 0                          # strettissimo: solo MAC e IP
+        voci = []
+        for d in schede:
+            tipo = tipi[d.mac]
+            ruolo_punto = "accento" if tipo == "questo_computer" else ("dati" if tipo == "router" else "ok")
+            riga: Riga = [(ruolo_punto, self.tema.simbolo("punto") + " "), ("dati", d.mac + "  "),
+                          ("testo", (d.ip or "-").ljust(ip_w))]
+            if modo:
+                riga.append(("tenue", "  " + t(modo + tipo).ljust(tipo_w)))
+            if modo == "tipo.":
+                riga.append(("tenue", "  " + _ora(d.primo)))
+            voci.append((riga, d))
+        return voci
+
+    def _righe_rete(self, ist: Istantanea, breve: bool = False) -> list[tuple[str, str, str]]:
         i, s = ist.interfaccia, ist.strada
         stato = ("ok", t("rete.cattura_attiva")) if ist.attiva else ("errore", t("rete.cattura_ferma"))
-        dns = {"no": ("ok", t("rete.dns_no")), "probabile": ("avviso", t("rete.dns_probabile")),
-               "presto": ("tenue", t("rete.dns_presto"))}[ist.dns_cifrato]
+        suffisso = "_breve" if breve else ""
+        ruolo_dns = {"no": "ok", "probabile": "avviso", "presto": "tenue"}[ist.dns_cifrato]
+        dns = (ruolo_dns, t(f"rete.dns_{ist.dns_cifrato}{suffisso}"))
         return [
             ("rete.interfaccia", f"{i.nome} ({t('interfacce.tipo.' + i.tipo)})" if i else "-", "testo"),
             ("rete.ip", (i.ipv4 or "-") if i else "-", "dati"),
@@ -301,8 +333,9 @@ class Cockpit:
         righe.append([("bordo", s("bs") + s("o") * interna + s("bd"))])
         return righe
 
-    def _pannello(self, ist: Istantanea, nome: str, colonne: int, altezza: int, attivo: bool) -> list[Riga]:
-        voci = self.voci(ist, nome)
+    def _pannello(self, ist: Istantanea, nome: str, colonne: int, altezza: int, attivo: bool,
+                  compatto: bool = False) -> list[Riga]:
+        voci = self.voci(ist, nome, colonne - 4, breve=compatto)   # 4 = bordi, cursore e spazio
         visibili = max(1, altezza - 2)
         sel = self._selezione_effettiva(nome, len(voci))
         inizio = max(0, min(sel - visibili + 1 if sel >= visibili else 0, max(0, len(voci) - visibili)))
@@ -374,9 +407,12 @@ class Cockpit:
         tasti_aiuto = "cockpit.tasti_sovrapposto" if self.sovrapposto else (
             "cockpit.tasti_intero" if self.intero else "cockpit.tasti")
         riga: Riga = [("testo", " ")]
-        for coppia in t(tasti_aiuto).split("  "):
+        for n, coppia in enumerate(t(tasti_aiuto).split("  ")):   # quando non c'e' posto si fermano, mai a meta'
             tasto, _, cosa = coppia.partition(" ")
-            riga += [("accento", tasto), ("tenue", f" {cosa}   ")]
+            pezzi: Riga = [("testo", "   " if n else ""), ("accento", tasto), ("tenue", f" {cosa}")]
+            if larghezza_riga(riga) + larghezza_riga(pezzi) > colonne:
+                break
+            riga += pezzi
         return messaggio, riga
 
     def _sovrapponi(self, corpo: list[Riga], colonne: int) -> list[Riga]:
@@ -397,14 +433,17 @@ class Cockpit:
         alt_corpo = max(3, altezza - 5)
         attivo = PANNELLI[self.pannello]
         if colonne >= SCHERMO_LARGO and not self.intero:
-            dx = max(LATERALE, min(50, colonne // 3))
+            dx = max(LATERALE, min(56, colonne // 3))
             sx = colonne - dx - 1
             principale = self._pannello(ist, attivo, sx, alt_corpo, True)
-            altro = "dispositivi" if attivo != "dispositivi" else "rete"
-            alt_dx = alt_corpo // 2 if altro == "dispositivi" else alt_corpo
-            laterale = self._pannello(ist, altro, dx, alt_dx, False)
-            if altro == "dispositivi":
-                laterale += self._pannello(ist, "rete", dx, alt_corpo - alt_dx, False)
+            # a destra solo i pannelli che non sono gia' aperti a sinistra
+            laterali = [p for p in ("dispositivi", "rete") if p != attivo]
+            if len(laterali) == 2:
+                alt_dx = alt_corpo - 12 if alt_corpo >= 24 else alt_corpo // 2   # la Rete ha 10 righe fisse
+                laterale = (self._pannello(ist, "dispositivi", dx, alt_dx, False, compatto=True)
+                            + self._pannello(ist, "rete", dx, alt_corpo - alt_dx, False, compatto=True))
+            else:
+                laterale = self._pannello(ist, laterali[0], dx, alt_corpo, False, compatto=True)
             corpo = [principale[n] + [("testo", " ")] + laterale[n] for n in range(alt_corpo)]
         else:
             corpo = self._pannello(ist, attivo, colonne, alt_corpo, True)
