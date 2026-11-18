@@ -43,6 +43,28 @@ Un solo comando, tre modi di usarlo:
 - `strinix --console` (oppure `--plain`, o un terminale "dumb"): la **console
   classica**, un prompt che scorre.
 
+### L'agente
+
+`strinix agente` ascolta la rete e registra tutto in un **archivio** (un
+database SQLite in `~/.local/state/strinix/archivio.db`), anche quando il
+cockpit è chiuso. Mentre l'agente gira:
+
+- `strinix` apre il cockpit **senza chiedere la password**: legge l'archivio
+  (in testata compare `· agente`), e quando lo chiudi l'ascolto continua;
+- `strinix dispositivi`, `strinix avvisi` e `strinix stato` funzionano anche
+  da terminale, anche con `--json`;
+- Strinix **si ricorda i dispositivi**: uno visto ieri non è "nuovo", e se
+  torna dopo almeno un'ora lo dice ("è tornato in rete dopo 3 h").
+
+Per ora l'agente gira in primo piano in un terminale (Ctrl+C per fermarlo);
+nella prossima versione diventerà un servizio di sistema. Ne gira uno solo
+alla volta.
+
+Nell'archivio ci sono solo **metadati** (chi c'è, chi si collega a cosa, gli
+avvisi), mai il contenuto dei pacchetti e mai password. I dati vecchi si
+cancellano da soli: eventi dopo 7 giorni, traffico in chiaro dopo 30,
+dispositivi non più visti dopo 90.
+
 Senza installarlo, dalla cartella del progetto: `python -m strinix` (e
 `python -m strinix <comando>`).
 
@@ -53,8 +75,9 @@ Cockpit, console e riga di comando usano la stessa tabella di comandi:
 | Generale | `aiuto [comando]` | elenco dei comandi, o l'uso di uno |
 | | `versione` | la versione |
 | Stato | `stato` | interfaccia, router e stato dell'ascolto |
-| | `dispositivi`, `avvisi` | dentro il cockpit: chi c'è in rete, cosa controllare |
-| Ascolto | `ascolta` | dal terminale: racconta la rete riga per riga |
+| | `dispositivi`, `avvisi` | chi c'è in rete, cosa controllare (dal cockpit o dall'archivio dell'agente) |
+| Ascolto | `agente` | ascolta e registra nell'archivio, anche a cockpit chiuso |
+| | `ascolta` | dal terminale: racconta la rete riga per riga |
 | Diagnostica | `verifica` | il computer è pronto? cosa manca? |
 | | `interfacce` | le schede di rete, e quale usa Strinix |
 | Impostazioni | `config`, `config crea` | la configurazione |
@@ -117,8 +140,7 @@ Dentro il cockpit ci sono solo i comandi che servono lì (`aiuto`, `stato`,
 `config`, `tema`, `versione`) si usano dal terminale.
 
 Il terminale viene sempre ripristinato, anche con Ctrl+C o se la finestra
-viene chiusa. Per ora, chiudendo il cockpit si ferma anche l'ascolto: l'agente
-in background arriverà nella prossima versione.
+viene chiusa. Senza l'agente, chiudendo il cockpit si ferma anche l'ascolto.
 
 ### Cosa rileva
 

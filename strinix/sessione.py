@@ -41,6 +41,8 @@ class Istantanea:
     dns_in_chiaro_mio: int = 0
     chiaro: tuple[InChiaro, ...] = ()               # protocolli non cifrati visti (mai il contenuto)
     storia_pps: tuple[int, ...] = ()                # pacchetti al secondo, gli ultimi 60 secondi
+    eventi_totali: int = 0                          # quanti eventi dall'avvio (per salvare solo i nuovi)
+    origine: str = "sessione"                       # "sessione" (dentro il cockpit) o "agente" (in background)
 
     @property
     def avvisi(self) -> tuple[Evento, ...]:
@@ -77,10 +79,16 @@ class Sessione:
         self._thread: threading.Thread | None = None
         self._cattura: Cattura | None = None
         self.pacchetti = self.illeggibili = 0
+        self.eventi_totali = 0
         self._secondi: deque[list[int]] = deque(maxlen=STORIA_PPS + 1)   # [secondo, pacchetti]
         self.attiva = False
         self.errore: tuple[str, dict] | None = None
         self.inizio = time.time()
+
+    def ricorda(self, schede: list[Dispositivo]) -> None:
+        """Prima di avviare: i dispositivi gia' noti (dall'archivio dell'agente)."""
+        with self._lock:
+            self.memoria.carica(schede)
 
     def avvia(self) -> None:
         """Avvia il custode e aspetta che sia pronto (sudo chiede qui la password). Lancia CatturaError."""
@@ -117,7 +125,9 @@ class Sessione:
                 with self._lock:
                     self.pacchetti += 1
                     self._conta(time.time())
-                    self._eventi.extend(self.memoria.osserva(p, frame.ora))
+                    nuovi = self.memoria.osserva(p, frame.ora)
+                    self._eventi.extend(nuovi)
+                    self.eventi_totali += len(nuovi)
         except CatturaError as exc:
             with self._lock:
                 self.errore = (exc.chiave, dict(exc.valori))
@@ -149,6 +159,7 @@ class Sessione:
                 dns_in_chiaro_mio=self.memoria.dns_in_chiaro_mio,
                 chiaro=tuple(replace(c) for c in self.memoria.chiaro.values()),
                 storia_pps=self._storia(time.time()),
+                eventi_totali=self.eventi_totali,
             )
 
     def ferma(self) -> None:

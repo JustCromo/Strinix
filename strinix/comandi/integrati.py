@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import signal
+import threading
 import time
 
-from strinix import __version__, ambiente, rete
+from strinix import __version__, agente, ambiente, archivio, rete
 from strinix import config as cfg
 from strinix.comandi.registro import FALLITO, GRUPPI, OK, USO, Argomenti, Comando, Contesto, Registro
 from strinix.decodifica import decodifica, scapy_disponibile
 from strinix.messaggi import t
-from strinix.sessione import Istantanea
+from strinix.sessione import Istantanea, Sessione
 from strinix.sorgente import Cattura, CatturaError
 from strinix.stato import Evento, Memoria
 from strinix.ui import tema as tm
@@ -105,13 +107,16 @@ def _scelta_corrente() -> tuple[rete.Interfaccia | None, rete.Strada | None]:
 
 
 def _stato(ctx: Contesto, args: Argomenti) -> int:
-    ist: Istantanea | None = ctx.sessione.istantanea() if ctx.sessione is not None else None
-    interfaccia, strada = (ist.interfaccia, ist.strada) if ist else _scelta_corrente()
+    fonte = ctx.sessione if ctx.sessione is not None else archivio.apri_fonte()
+    ist: Istantanea | None = fonte.istantanea() if fonte is not None else None
+    interfaccia, strada = (ist.interfaccia, ist.strada) if ist and ist.interfaccia else _scelta_corrente()
     dati = {
         "interfaccia": interfaccia.nome if interfaccia else None,
         "ip": interfaccia.ipv4 if interfaccia else None,
         "router": strada.gateway if strada else None,
         "ascolto": {"attivo": bool(ist and ist.attiva)},
+        "agente": {"attivo": bool(ist and ist.origine == "agente" and ist.attiva),
+                   "archivio": str(fonte.archivio.percorso) if isinstance(fonte, archivio.FonteArchivio) else None},
     }
     if ist:
         dati["ascolto"].update({"pacchetti": ist.pacchetti, "pacchetti_al_secondo": round(ist.pps, 1),
@@ -130,14 +135,20 @@ def _stato(ctx: Contesto, args: Argomenti) -> int:
         ctx.scrivi("  " + t("stato.numeri", dispositivi=a["dispositivi"], avvisi=a["avvisi"]))
     else:
         ctx.scrivi("  " + tema("tenue", t("stato.ascolto_spento")))
+    if dati["agente"]["attivo"]:
+        ctx.scrivi("  " + tema("ok", t("stato.agente_attivo", archivio=dati["agente"]["archivio"])))
+    elif dati["agente"]["archivio"]:
+        ctx.scrivi("  " + tema("tenue", t("stato.agente_fermo", archivio=dati["agente"]["archivio"])))
     return OK
 
 
 def _serve_sessione(ctx: Contesto) -> Istantanea | None:
-    if ctx.sessione is None:
-        ctx.errore("cli.serve_cockpit")
+    """L'ascolto in corso: quello del cockpit, oppure l'archivio dell'agente."""
+    fonte = ctx.sessione if ctx.sessione is not None else archivio.apri_fonte()
+    if fonte is None:
+        ctx.errore("cli.serve_ascolto")
         return None
-    return ctx.sessione.istantanea()
+    return fonte.istantanea()
 
 
 def _dispositivi(ctx: Contesto, args: Argomenti) -> int:
@@ -226,6 +237,68 @@ def _ascolta(ctx: Contesto, args: Argomenti) -> int:
     ctx.scrivi(t("ascolta.riepilogo", pacchetti=pacchetti, secondi=round(time.monotonic() - inizio),
                  dispositivi=len(memoria.dispositivi), illeggibili=illeggibili))
     return codice
+
+
+def _agente(ctx: Contesto, args: Argomenti) -> int:
+    """L'agente in primo piano: ascolta e scrive l'archivio finche' non lo fermi (Ctrl+C)."""
+    tema = ctx.tema
+    if not scapy_disponibile():
+        ctx.errore("verifica.scapy_manca")
+        return FALLITO
+    try:
+        cfg.carica()
+    except cfg.ConfigError as exc:
+        ctx.errore(exc.chiave, **exc.valori)
+        return FALLITO
+    scelta, strada = _scelta_corrente()
+    if scelta is None:
+        ctx.errore("verifica.interfaccia_manca")
+        return FALLITO
+    try:
+        arch = archivio.Archivio(archivio.percorso_predefinito(), scrittura=True)
+    except archivio.ArchivioError as exc:
+        ctx.errore("archivio." + exc.motivo, percorso=archivio.percorso_predefinito())
+        return FALLITO
+    lucchetto = agente.Lucchetto(arch.percorso.with_name("agente.lock"))
+    if not lucchetto.prendi():
+        ctx.errore("agente.gia_attivo")
+        arch.chiudi()
+        return FALLITO
+    sessione = Sessione(scelta, strada, rete.mac_di(strada.gateway) if strada else None)
+    sessione.ricorda(arch.dispositivi_noti())
+    ctx.scrivi(tema("accento", t("agente.titolo", nome=scelta.nome)))
+    print(tema("tenue", t("ascolta.sudo")), file=ctx.out, flush=True)
+    try:
+        sessione.avvia()
+    except (CatturaError, KeyboardInterrupt) as exc:
+        if isinstance(exc, CatturaError):
+            ctx.errore(exc.chiave, **exc.valori)
+        lucchetto.lascia()
+        arch.chiudi()
+        return FALLITO
+    print(tema("ok", t("agente.avviato", archivio=arch.percorso)), file=ctx.out, flush=True)
+    ferma = threading.Event()
+    vecchi = {s: signal.signal(s, lambda *_: ferma.set()) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+
+    def racconta(ist: Istantanea, nuovi: int) -> None:
+        for e in ist.eventi[-nuovi:] if nuovi else ():
+            if e.livello != "info":
+                ruolo = "errore" if e.livello == "grave" else "avviso"
+                print(f"  {tema('tenue', _ora(e.ora))} {tema(ruolo, tema.simbolo(ruolo))} {tema(ruolo, testo_evento(e))}",
+                      file=ctx.out, flush=True)
+    try:
+        errore = agente.esegui(sessione, arch, ferma, al_salvataggio=racconta)
+    finally:
+        for s, vecchio in vecchi.items():
+            signal.signal(s, vecchio)
+        dispositivi, eventi = arch.conta()
+        arch.chiudi()
+        lucchetto.lascia()
+    ctx.scrivi()
+    if errore:
+        ctx.errore(errore)
+    ctx.scrivi(t("agente.fermato", dispositivi=dispositivi, eventi=eventi))
+    return FALLITO if errore else OK
 
 
 # ---------------------------------------------------------------- diagnostica
@@ -334,8 +407,9 @@ def crea_registro() -> Registro:
         Comando(("versione",), "generale", _versione, flag=JSON, priorita=90, solo_terminale=True),
         Comando(("esci",), "generale", _esci, solo_interattivo=True, priorita=95),
         Comando(("stato",), "stato", _stato, flag=JSON, priorita=20),
-        Comando(("dispositivi",), "stato", _dispositivi, flag=JSON, solo_interattivo=True, priorita=15),
-        Comando(("avvisi",), "stato", _avvisi, flag=JSON, solo_interattivo=True, priorita=15),
+        Comando(("dispositivi",), "stato", _dispositivi, flag=JSON, priorita=15),
+        Comando(("avvisi",), "stato", _avvisi, flag=JSON, priorita=15),
+        Comando(("agente",), "ascolto", _agente, solo_terminale=True, priorita=25),
         Comando(("ascolta",), "ascolto", _ascolta, solo_terminale=True, priorita=30),
         # i comandi di sistema restano per la diagnosi da terminale, ma non affollano il cockpit
         Comando(("verifica",), "diagnostica", _verifica, flag=JSON, priorita=40, solo_terminale=True),

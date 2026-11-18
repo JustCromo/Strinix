@@ -39,7 +39,7 @@ class TestEsegui(unittest.TestCase):
     def setUp(self):
         self.r = crea_registro()
         self._tmp = tempfile.TemporaryDirectory()
-        self._env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": self._tmp.name})
+        self._env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": self._tmp.name, "XDG_STATE_HOME": self._tmp.name})
         self._env.start()
 
     def tearDown(self):

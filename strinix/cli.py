@@ -10,8 +10,8 @@ import os
 import signal
 import sys
 
+from strinix import archivio, cronologia, file_sicuri, rete
 from strinix import config as cfg
-from strinix import cronologia, file_sicuri, rete
 from strinix.comandi.integrati import crea_registro
 from strinix.comandi.registro import FALLITO, Contesto
 from strinix.decodifica import scapy_disponibile
@@ -59,37 +59,47 @@ def _terminale_vero(out) -> bool:
 
 
 def _cockpit(registro, tema: Tema, out, err) -> int:
-    """Avvia la sessione (sudo chiede qui la password, prima di cambiare schermo), poi apre il cockpit."""
+    """Se l'agente sta ascoltando, il cockpit legge il suo archivio (niente sudo).
+
+    Altrimenti avvia una sessione sua: sudo chiede la password qui, prima di cambiare schermo.
+    """
     from strinix.tui import cockpit as ck
 
     ctx = Contesto(tema=tema, out=out, err=err)
-    if not scapy_disponibile():
-        ctx.errore("verifica.scapy_manca")
-        return FALLITO
-    try:
-        richiesta = cfg.carica().interfaccia
-    except cfg.ConfigError as exc:
-        ctx.errore(exc.chiave, **exc.valori)
-        return FALLITO
-    strada = rete.strada_predefinita()
-    scelta = rete.scegli(richiesta, rete.elenca(), strada)
-    if scelta is None:
-        ctx.errore("verifica.interfaccia_manca")
-        return FALLITO
-    sessione = Sessione(scelta, strada, rete.mac_di(strada.gateway) if strada else None)
-    print(tema("accento", t("ascolta.titolo", nome=scelta.nome)), file=out)
-    print(tema("tenue", t("ascolta.sudo")), file=out, flush=True)
-    try:
-        sessione.avvia()
-    except CatturaError as exc:
-        ctx.errore(exc.chiave, **exc.valori)
-        return FALLITO
-    except KeyboardInterrupt:
-        print(file=out)
-        return FALLITO
+    fonte = archivio.apri_fonte()
+    sessione = None
+    if fonte is None or not fonte.archivio.agente_vivo():
+        if not scapy_disponibile():
+            ctx.errore("verifica.scapy_manca")
+            return FALLITO
+        try:
+            richiesta = cfg.carica().interfaccia
+        except cfg.ConfigError as exc:
+            ctx.errore(exc.chiave, **exc.valori)
+            return FALLITO
+        strada = rete.strada_predefinita()
+        scelta = rete.scegli(richiesta, rete.elenca(), strada)
+        if scelta is None:
+            ctx.errore("verifica.interfaccia_manca")
+            return FALLITO
+        sessione = Sessione(scelta, strada, rete.mac_di(strada.gateway) if strada else None)
+        if fonte is not None:
+            sessione.ricorda(fonte.archivio.dispositivi_noti())   # i dispositivi gia' noti non sono "nuovi"
+            fonte.archivio.chiudi()
+        print(tema("accento", t("ascolta.titolo", nome=scelta.nome)), file=out)
+        print(tema("tenue", t("ascolta.sudo")), file=out, flush=True)
+        try:
+            sessione.avvia()
+        except CatturaError as exc:
+            ctx.errore(exc.chiave, **exc.valori)
+            return FALLITO
+        except KeyboardInterrupt:
+            print(file=out)
+            return FALLITO
+    sorgente = sessione if sessione is not None else fonte
     segno_guida = file_sicuri.cartella_stato() / "guida-vista"
     prima_volta = not segno_guida.exists()
-    cockpit = ck.Cockpit(registro, tema, sessione, storia=cronologia.carica(), prima_volta=prima_volta)
+    cockpit = ck.Cockpit(registro, tema, sorgente, storia=cronologia.carica(), prima_volta=prima_volta)
     try:
         ck.esegui(cockpit, sys.stdin.fileno(), out)
     except SystemExit:
@@ -98,14 +108,17 @@ def _cockpit(registro, tema: Tema, out, err) -> int:
             print(t("cockpit.segnale", segnale=signal.Signals(segnale).name), file=err)
         raise
     finally:
-        sessione.ferma()
+        if sessione is not None:
+            sessione.ferma()
+        else:
+            fonte.archivio.chiudi()
         cronologia.salva(cockpit.storia)
         if prima_volta:
             try:
                 file_sicuri.scrivi(segno_guida, "", sovrascrivi=False)
             except (file_sicuri.FileNonSicuro, OSError):
                 pass
-    print(t("cockpit.chiuso"), file=out)
+    print(t("cockpit.chiuso" if sessione is not None else "cockpit.chiuso_agente"), file=out)
     return 0
 
 

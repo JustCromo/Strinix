@@ -82,6 +82,13 @@ class TestScansionePorte(unittest.TestCase):
     def test_scansione_completa_grave(self):
         self.assertEqual(tipi(self.scansione(memoria(), 150))[-1], ("scansione_porte", "grave"))
 
+    def test_scansione_non_inonda_live(self):
+        m = memoria()
+        eventi = []
+        for porta in range(1, 200):
+            eventi += m.osserva(syn("192.168.50.116", porta), porta * 0.01)
+        self.assertEqual(sum(e.chiave == "evento.connessione" for e in eventi), 1)
+
     def test_non_contro_di_me_o_rumore_udp(self):
         self.assertEqual(self.scansione(memoria(), 50, dst="192.168.50.20"), [])
         m = memoria()

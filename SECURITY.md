@@ -72,6 +72,24 @@ sistema, di proprietà di root.
   il router vero, nomi di dominio normali di Google o dei CDN), perché un
   falso allarme insegna a ignorare quelli veri.
 
+## L'archivio dell'agente
+
+- È un database SQLite in `~/.local/state/strinix/archivio.db`: cartella
+  `700`, file `600`, creato senza seguire collegamenti. Un archivio che è un
+  collegamento, che non è un file normale, che chiunque può modificare o (per
+  scriverci) che non è tuo viene rifiutato.
+- Contiene solo metadati, mai contenuti né password, e i dati scadono da soli
+  (eventi 7 giorni, traffico in chiaro 30, dispositivi 90).
+- L'agente scrive; cockpit e comandi aprono l'archivio **in sola lettura**.
+  Tutte le query usano parametri, mai testo incollato dentro l'SQL, e
+  `trusted_schema` è spento.
+- Chi legge tratta l'archivio come input non fidato: ogni riga viene
+  controllata (MAC, IP, numeri, livelli e tipi di evento ammessi, JSON con
+  dimensione massima) e le righe sbagliate vengono scartate. Un test inserisce
+  apposta righe manomesse e sequenze di escape e controlla che non arrivino al
+  terminale.
+- Un solo agente alla volta (un lucchetto `flock`).
+
 ## Comandi e terminale
 
 - I comandi sono una **tabella chiusa**: nessun comando viene costruito da

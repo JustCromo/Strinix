@@ -26,6 +26,7 @@ DNS_SILENZIO = 60.0       # la stessa richiesta DNS dallo stesso dispositivo non
 CONNESSIONE_SILENZIO = 300.0
 CHIARO_SILENZIO = 300.0
 ONLINE = 300.0            # visto negli ultimi 5 minuti = online
+RITORNO = 3600.0          # se un dispositivo noto ricompare dopo un'ora, Strinix lo dice
 
 SERVIZI = {
     ("tcp", 443): "HTTPS", ("udp", 443): "HTTPS (QUIC)", ("tcp", 80): "HTTP", ("tcp", 8080): "HTTP",
@@ -132,6 +133,11 @@ class Memoria:
             # il MAC del router lo conosciamo gia' (dal kernel): chi prova a prenderne il posto si vede subito
             self.arp[router_ip] = router_mac
 
+    def carica(self, schede: list[Dispositivo]) -> None:
+        """Ricorda i dispositivi gia' visti (dall'archivio): non sono "nuovi", e se tornano si dice."""
+        for d in sorted(schede, key=lambda d: d.ultimo)[-self.max_dispositivi:]:
+            self.dispositivi[d.mac] = d
+
     def etichetta(self, mac: str) -> str:
         if mac == self.mio_mac:
             return "questo_computer"
@@ -188,6 +194,10 @@ class Memoria:
         mac = p.mac_sorgente
         if _unicast(mac):
             scheda = self.dispositivi.get(mac)
+            if scheda is not None and ora - scheda.ultimo >= RITORNO:
+                eventi.append(Evento(ora, "info", "evento.ritorno", {
+                    "mac": mac, "ip": ip_noto or scheda.ip or "-", "chi": self.chi(mac, ip_noto or scheda.ip),
+                    "minuti": str(int((ora - scheda.ultimo) // 60))}))
             if scheda is None:
                 if len(self.dispositivi) >= self.max_dispositivi:
                     self._segnala_piena(ora, eventi)
@@ -248,7 +258,9 @@ class Memoria:
         if scheda is not None:
             if dove in scheda.destinazioni or len(scheda.destinazioni) < MAX_DESTINAZIONI:
                 scheda.destinazioni[dove] = scheda.destinazioni.get(dove, 0) + 1
-        chiave = (p.ip_sorgente, dove, servizio)
+        in_entrata = self.mio_ip is not None and p.ip_destinazione == self.mio_ip
+        # in entrata: una riga per dispositivo ogni 5 minuti, cosi' una scansione non inonda Live
+        chiave = (p.ip_sorgente, "in entrata") if in_entrata else (p.ip_sorgente, dove, servizio)
         ultima = self.connessioni.get(chiave)
         if ultima is None or ora - ultima >= CONNESSIONE_SILENZIO:
             eventi.append(Evento(ora, "info", "evento.connessione",

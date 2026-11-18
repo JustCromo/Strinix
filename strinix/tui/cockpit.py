@@ -77,11 +77,20 @@ def _chiave_ip(ip: str | None) -> tuple:
 
 def titolo_evento(e: Evento) -> str:
     """La frase breve che va nelle liste; il testo lungo sta nella pagina di dettaglio."""
+    return t("titolo." + e.chiave.removeprefix("evento."), **valori_evento(e))
+
+
+def valori_evento(e: Evento) -> dict:
+    """I valori dell'evento, piu' quelli calcolati per mostrarli (durata, nome, etichetta)."""
     valori = dict(e.valori)
+    if e.chiave == "evento.ritorno":
+        minuti = int(valori.get("minuti") or 0) if str(valori.get("minuti", "")).isdigit() else 0
+        valori["durata"] = (t("durata.minuti", n=minuti) if minuti < 60 else
+                            t("durata.ore", n=minuti // 60) if minuti < 1440 else t("durata.giorni", n=minuti // 1440))
     if e.chiave == "evento.nuovo_dispositivo":
         valori["nome"] = valori.get("produttore") or t("titolo.un_dispositivo")
         valori["etichetta"] = t("etichetta." + valori.get("etichetta", "nessuna"))
-    return t("titolo." + e.chiave.removeprefix("evento."), **valori)
+    return valori
 
 
 def _rientro(riga: Riga) -> int:
@@ -350,10 +359,10 @@ class Cockpit:
     def _pagina_evento(self, e: Evento) -> None:
         ist = self.istantanea()
         tipo = e.chiave.removeprefix("evento.")
-        valori = dict(e.valori)
+        valori = valori_evento(e)
         righe: list[Riga] = self._spiegazione(tipo, valori)[1:] or [[("testo", testo_evento(e))]]
         coppie = [("dettaglio.ora", f"{_ora(e.ora)} ({_fa(time.time() - e.ora)})", "testo")]
-        coppie += [("campo." + k, str(v), "dati") for k, v in valori.items()
+        coppie += [("campo." + k, str(v), "dati") for k, v in e.valori.items()
                    if v not in ("", None) and k in CAMPI_MOSTRATI]
         righe += self._sezione("pagina.dettagli") + self._chiave_valore(coppie)
         righe += self._eventi_di(ist, valori.get("mac"), valori.get("ip"))
@@ -674,6 +683,8 @@ class Cockpit:
             destra: Riga = [("avviso", f"{tema.simbolo('pausa')} {t('cockpit.in_pausa')}")]
         elif ist.attiva:
             destra = [("tenue", t("cockpit.in_ascolto") + " "), ("ok", nome)]
+            if ist.origine == "agente":
+                destra.append(("tenue", " · " + t("cockpit.agente")))
         else:
             destra = [("errore", t("cockpit.cattura_ferma"))]
         prima = self._allinea(sinistra, destra, colonne)
