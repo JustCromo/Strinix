@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strinix"
+dynamic = ["version"]
+description = "Monitor di rete che spiega cosa succede, in parole semplici"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+strinix = "strinix.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "strinix.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["strinix*"]
+
+[tool.setuptools.package-data]
+"strinix.lingue" = ["*.json"]
