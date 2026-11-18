@@ -25,6 +25,8 @@ def testo_evento(e: Evento) -> str:
     valori = dict(e.valori)
     if "etichetta" in valori:
         valori["etichetta"] = t("etichetta." + valori["etichetta"])
+    if "produttore" in valori:
+        valori["produttore"] = f" {valori['produttore']}" if valori["produttore"] else ""
     return t(e.chiave, **valori)
 
 
@@ -64,7 +66,7 @@ def _aiuto(ctx: Contesto, args: Argomenti) -> int:
         ctx.scrivi(t("cli.modi"))
         ctx.scrivi()
     for gruppo in GRUPPI:
-        comandi = [c for c in registro.visibili(ctx.interattivo) if c.gruppo == gruppo]
+        comandi = [c for c in registro.visibili(ctx.interattivo, ctx.nel_cockpit) if c.gruppo == gruppo]
         if not comandi:
             continue
         ctx.scrivi(tema("dati", t("gruppo." + gruppo)))
@@ -142,7 +144,10 @@ def _dispositivi(ctx: Contesto, args: Argomenti) -> int:
         return FALLITO
     schede = sorted(ist.dispositivi, key=lambda d: d.primo)
     if args.json:
-        ctx.stampa_json([{"mac": d.mac, "ip": d.ip, "tipo": ist.etichette.get(d.mac, "nessuna"),
+        adesso = time.time()
+        ctx.stampa_json([{"mac": d.mac, "ip": d.ip, "tipo": ist.etichette.get(d.mac, "nessuna"), "nome": d.nome,
+                          "produttore": d.produttore, "online": d.online(adesso),
+                          "byte_inviati": d.byte_inviati, "byte_ricevuti": d.byte_ricevuti,
                           "primo": round(d.primo, 3), "ultimo": round(d.ultimo, 3), "pacchetti": d.pacchetti}
                          for d in schede])
         return OK
@@ -150,7 +155,8 @@ def _dispositivi(ctx: Contesto, args: Argomenti) -> int:
         ctx.scrivi(t("dispositivi.nessuno"))
     for d in schede:
         tipo = t("tipo." + ist.etichette.get(d.mac, "nessuna"))
-        ctx.scrivi(f"  {ctx.tema('dati', d.mac)}  {(d.ip or '-'):<15} {tipo:<26} {_ora(d.primo)}")
+        nome = d.nome or d.produttore or tipo or "-"
+        ctx.scrivi(f"  {ctx.tema('dati', d.mac)}  {(d.ip or '-'):<15} {nome[:28]:<28} {_ora(d.ultimo)}")
     return OK
 
 
@@ -164,7 +170,8 @@ def _avvisi(ctx: Contesto, args: Argomenti) -> int:
     if not ist.avvisi:
         ctx.scrivi(t("avvisi.nessuno"))
     for e in ist.avvisi:
-        ctx.scrivi(f"  {ctx.tema('tenue', _ora(e.ora))} {ctx.tema('avviso', testo_evento(e))}")
+        ruolo = "errore" if e.livello == "grave" else "avviso"
+        ctx.scrivi(f"  {ctx.tema('tenue', _ora(e.ora))} {ctx.tema(ruolo, testo_evento(e))}")
     return OK
 
 
@@ -203,8 +210,9 @@ def _ascolta(ctx: Contesto, args: Argomenti) -> int:
                     illeggibili += 1
                     continue
                 for e in memoria.osserva(p, frame.ora):
-                    simbolo = tema("avviso", "!") if e.livello != "info" else tema("ok", tema.simbolo("punto"))
-                    testo = tema("avviso", testo_evento(e)) if e.livello != "info" else testo_evento(e)
+                    ruolo = {"avviso": "avviso", "grave": "errore"}.get(e.livello)
+                    simbolo = tema(ruolo, tema.simbolo(ruolo)) if ruolo else tema("ok", tema.simbolo("punto"))
+                    testo = tema(ruolo, testo_evento(e)) if ruolo else testo_evento(e)
                     print(f"  {tema('tenue', _ora(e.ora))} {simbolo} {testo}", file=ctx.out, flush=True)
     except CatturaError as exc:
         ctx.errore(exc.chiave, **exc.valori)
@@ -320,15 +328,16 @@ def _tema(ctx: Contesto, args: Argomenti) -> int:
 def crea_registro() -> Registro:
     return Registro([
         Comando(("aiuto",), "generale", _aiuto, liberi=2, segnaposto="comando", priorita=10),
-        Comando(("versione",), "generale", _versione, flag=JSON, priorita=90),
+        Comando(("versione",), "generale", _versione, flag=JSON, priorita=90, solo_terminale=True),
         Comando(("esci",), "generale", _esci, solo_interattivo=True, priorita=95),
         Comando(("stato",), "stato", _stato, flag=JSON, priorita=20),
         Comando(("dispositivi",), "stato", _dispositivi, flag=JSON, solo_interattivo=True, priorita=15),
         Comando(("avvisi",), "stato", _avvisi, flag=JSON, solo_interattivo=True, priorita=15),
         Comando(("ascolta",), "ascolto", _ascolta, solo_terminale=True, priorita=30),
-        Comando(("verifica",), "diagnostica", _verifica, flag=JSON, priorita=40),
-        Comando(("interfacce",), "diagnostica", _interfacce, flag=JSON, priorita=45),
-        Comando(("config",), "impostazioni", _config, flag=JSON, priorita=60),
-        Comando(("config", "crea"), "impostazioni", _config_crea, priorita=70),
-        Comando(("tema",), "impostazioni", _tema, flag=JSON, priorita=65),
+        # i comandi di sistema restano per la diagnosi da terminale, ma non affollano il cockpit
+        Comando(("verifica",), "diagnostica", _verifica, flag=JSON, priorita=40, solo_terminale=True),
+        Comando(("interfacce",), "diagnostica", _interfacce, flag=JSON, priorita=45, solo_terminale=True),
+        Comando(("config",), "impostazioni", _config, flag=JSON, priorita=60, solo_terminale=True),
+        Comando(("config", "crea"), "impostazioni", _config_crea, priorita=70, solo_terminale=True),
+        Comando(("tema",), "impostazioni", _tema, flag=JSON, priorita=65, solo_terminale=True),
     ])

@@ -47,6 +47,24 @@ sistema, di proprietà di root.
 - `strinix config crea` scrive il file con permessi `600`, non segue
   collegamenti e non sovrascrive mai un file esistente.
 
+## Cosa Strinix guarda nei pacchetti (e cosa no)
+
+- Del contenuto guarda solo l'inizio (al massimo 4 KB) e solo per capire **che
+  protocollo** è: il nome del sito (HTTP `Host`, HTTPS SNI) e se c'è un comando
+  di accesso (`PASS`, `LOGIN`, `AUTH`, `Authorization: Basic`, un campo
+  `password=`).
+- Le password e i nomi utente **non vengono mai letti, salvati o mostrati**:
+  Strinix registra solo "qui è passata una password", con chi, protocollo e
+  destinazione. Un test lo controlla.
+- Ogni campo letto dalla rete (nomi di siti, nomi dei dispositivi da DHCP e
+  mDNS, risposte DNS) viene accettato solo se contiene caratteri ammessi per un
+  nome di host e ha una lunghezza ragionevole; altrimenti viene scartato.
+- Il lettore del messaggio TLS (per il nome del sito HTTPS) controlla ogni
+  lunghezza prima di usarla: un pacchetto con lunghezze bugiarde o tagliato
+  viene ignorato. I test lo provano con pacchetti troncati e casuali.
+- Ogni elenco in memoria ha un limite fisso (dispositivi, connessioni, nomi,
+  traffico in chiaro, destinazioni di ogni dispositivo).
+
 ## Comandi e terminale
 
 - I comandi sono una **tabella chiusa**: nessun comando viene costruito da
@@ -57,6 +75,9 @@ sistema, di proprietà di root.
   terminale: caratteri di controllo, sequenze di escape e caratteri Unicode
   che girano o nascondono il testo (bidi). Le righe vengono tagliate alla
   larghezza della finestra.
+- Il tasto `c` del cockpit copia negli appunti con la sequenza OSC 52 solo
+  testo già ripulito: niente caratteri di controllo, al massimo 1000 caratteri.
+  Strinix scrive negli appunti, ma non li legge mai.
 - `--json` non contiene mai sequenze di escape: i caratteri di controllo
   diventano `\uXXXX`.
 - Cronologia dei comandi e stato del cockpit stanno in

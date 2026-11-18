@@ -39,4 +39,11 @@ def t(chiave: str, /, **valori: object) -> str:
     modello = carica(_lingua).get(chiave)
     if modello is None:  # non dovrebbe succedere: un test controlla che ogni chiave usata esista
         return chiave
-    return modello.format_map({k: pulisci(v) for k, v in valori.items()})
+    return modello.format_map(_Valori({k: pulisci(v) for k, v in valori.items()}))
+
+
+class _Valori(dict):
+    """Se manca un valore il testo mostra "?" invece di far cadere il programma."""
+
+    def __missing__(self, chiave: str) -> str:
+        return "?"

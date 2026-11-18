@@ -104,7 +104,9 @@ class TestEsegui(unittest.TestCase):
                 self.assertIn("cockpit", err)
 
     def test_ascolta_vietato_dentro_il_cockpit(self):
-        self.assertEqual(self.esegui("ascolta", interattivo=True)[0], USO)
+        self.assertEqual(self.esegui("ascolta", interattivo=True, nel_cockpit=True)[0], USO)
+        self.assertEqual(self.esegui("tema", interattivo=True, nel_cockpit=True)[0], USO)
+        self.assertEqual(self.esegui("versione", interattivo=True)[0], OK)   # nella console si
 
     def test_esci_nel_cockpit(self):
         ctx = contesto(interattivo=True)

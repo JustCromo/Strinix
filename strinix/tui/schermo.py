@@ -70,6 +70,7 @@ class Schermo:
         self._gestori: dict[int, object] = {}
         self.ridimensionato = True
         self._attivo = False
+        self._ultime: list[str] = []
 
     def dimensioni(self) -> tuple[int, int]:
         try:
@@ -122,13 +123,22 @@ class Schermo:
         atexit.unregister(self.ripristina)
 
     def disegna(self, righe: list[str]) -> None:
-        """Ridisegna tutto lo schermo in un colpo solo (niente sfarfallio)."""
-        parti = ["\x1b[H"]
+        """Riscrive solo le righe cambiate dall'ultima volta.
+
+        Cosi' il testo che stai selezionando con il mouse non viene cancellato a ogni
+        aggiornamento (molti terminali tolgono la selezione quando la zona cambia).
+        """
+        parti = []
         for n, riga in enumerate(righe):
+            if n < len(self._ultime) and self._ultime[n] == riga:
+                continue
             parti.append(f"\x1b[{n + 1};1H{riga}\x1b[0m")
-        self.out.write("".join(parti))
-        self.out.flush()
+        self._ultime = list(righe)
+        if parti:
+            self.out.write("".join(parti))
+            self.out.flush()
 
     def pulisci(self) -> None:
+        self._ultime = []
         self.out.write("\x1b[0m\x1b[2J")
         self.out.flush()

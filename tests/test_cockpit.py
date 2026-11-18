@@ -49,6 +49,22 @@ class FontaAffollata(Finta):
         return replace(ist, dispositivi=ist.dispositivi + extra)
 
 
+class TestRidisegno(unittest.TestCase):
+    def test_solo_righe_cambiate(self):
+        import io
+
+        from strinix.tui.schermo import Schermo
+        out = io.StringIO()
+        s = Schermo(0, out)
+        s.disegna(["a", "b", "c"])
+        out.seek(0), out.truncate()
+        s.disegna(["a", "B", "c"])
+        self.assertEqual(out.getvalue(), "\x1b[2;1HB\x1b[0m")
+        out.seek(0), out.truncate()
+        s.disegna(["a", "B", "c"])
+        self.assertEqual(out.getvalue(), "")
+
+
 class TestTasti(unittest.TestCase):
     def test_niente_a_capo_automatico(self):
         self.assertIn("\x1b[?7l", ENTRA)
@@ -149,6 +165,8 @@ class TestTastiCockpit(unittest.TestCase):
         self.scrivi("\x1b[Z\x1b[Z")
         self.assertEqual(PANNELLI[self.c.pannello], "avvisi")
         self.scrivi("4")
+        self.assertEqual(PANNELLI[self.c.pannello], "chiaro")
+        self.scrivi("5")
         self.assertEqual(PANNELLI[self.c.pannello], "rete")
 
     def test_comando_con_completamento(self):
@@ -165,7 +183,7 @@ class TestTastiCockpit(unittest.TestCase):
 
     def test_ascolta_rifiutato_nel_cockpit(self):
         self.scrivi(":ascolta\r")
-        self.assertIn("Live", "".join(t for r in self.c.sovrapposto[1] for _, t in r))
+        self.assertIn("terminale", "".join(t for r in self.c.sovrapposto[1] for _, t in r))
 
     def test_esci_da_comando(self):
         self.scrivi(":esci\r")
@@ -202,6 +220,48 @@ class TestTastiCockpit(unittest.TestCase):
         self.assertIs(self.c.istantanea(), self.c.istantanea())
         self.scrivi("p")
         self.assertFalse(self.c.pausa)
+
+    def test_pannello_in_chiaro(self):
+        self.scrivi("4")
+        schermo = "".join(visibile(r) for r in self.c.righe(140, 30))
+        self.assertIn("password in chiaro", schermo)
+        self.assertIn("example.com", schermo)
+        self.scrivi("\r\x1b[B\r")
+        self.assertEqual(self.c.sovrapposto[0], "Traffico in chiaro")
+
+    def test_copia_riga(self):
+        self.scrivi("3c")
+        self.assertIn("2c:8d:b1:71:af:ed", self.c.da_copiare)
+        self.assertIn("Copiato", "".join(visibile(r) for r in self.c.righe(100, 20)))
+
+    def test_copia_ripulita(self):
+        self.c.fonte = FontaOstile()
+        self.scrivi("2\x1b[Fc")
+        self.assertNotIn("\x1b", self.c.da_copiare)
+        self.assertNotIn("\u202e", self.c.da_copiare)
+
+    def test_ordinamento(self):
+        self.scrivi("3o")
+        self.assertIn("per traffico", "".join(visibile(r) for r in self.c.righe(140, 30)))
+        prima = self.c.voci(self.c.istantanea(), "dispositivi")[0][1]
+        self.assertEqual(prima.mac, "2c:8d:b1:71:af:ed")   # quello con piu' traffico
+        self.scrivi("ooo")
+        self.assertEqual(self.c.ordine, 0)
+
+    def test_dettaglio_dispositivo_vivo(self):
+        self.scrivi("3\r\r")
+        testo = "".join(x for r in self.c.sovrapposto[1] for _, x in r)
+        for atteso in ("Intel", "github.com", "online", "inviati"):
+            self.assertIn(atteso, testo)
+
+    def test_comandi_di_sistema_fuori_dal_cockpit(self):
+        nomi = [c.nome for c in self.c.registro.completa("")]
+        for nome in ("verifica", "tema", "config", "interfacce", "versione"):
+            self.assertNotIn(nome, nomi)
+        self.scrivi(":aiuto\r")
+        testo = "".join(x for r in self.c.sovrapposto[1] for _, x in r)
+        self.assertNotIn("tema", testo)
+        self.assertIn("dispositivi", testo)
 
     def test_q_esce(self):
         self.scrivi("q")
@@ -271,6 +331,8 @@ class TestTerminaleFinto(unittest.TestCase):
         self.assertIn("strinix", schermo)
         os.write(fd, b":stato\r")
         self.assertIn("Ascolto attivo", self.leggi(fd))
+        os.write(fd, b"\x1b3c")
+        self.assertIn("\x1b]52;c;", self.leggi(fd))      # copia negli appunti
         os.write(fd, b"\x1bq")
         resto = self.leggi(fd)
         self.assertTrue(os.WIFEXITED(self.aspetta(pid)))

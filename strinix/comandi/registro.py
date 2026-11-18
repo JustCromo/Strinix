@@ -39,6 +39,7 @@ class Contesto:
     err: TextIO = field(default_factory=lambda: sys.stderr)
     sessione: Any = None          # la sessione di ascolto, se c'e' (cockpit)
     interattivo: bool = False     # True nel cockpit e nella console
+    nel_cockpit: bool = False     # True solo nel cockpit: qui i comandi di sistema non servono
     uscita: bool = False          # il comando `esci` chiede di chiudere cockpit o console
 
     def scrivi(self, testo: str = "") -> None:
@@ -65,7 +66,7 @@ class Comando:
     scelte: tuple[str, ...] | None = None    # valori ammessi per il primo argomento libero
     segnaposto: str = ""                     # come si chiama l'argomento libero nell'uso
     priorita: int = 50                       # piu' basso = proposto prima nel completamento
-    solo_terminale: bool = False             # non ha senso dentro il cockpit (es. ascolta)
+    solo_terminale: bool = False             # non serve dentro il cockpit (ascolta, verifica, tema...)
     solo_interattivo: bool = False           # ha senso solo con una sessione aperta
     nascosto: bool = False
 
@@ -95,9 +96,9 @@ class Registro:
             if c.gruppo not in GRUPPI:
                 raise ValueError("gruppo sconosciuto")
 
-    def visibili(self, interattivo: bool = False) -> list[Comando]:
+    def visibili(self, interattivo: bool = False, nel_cockpit: bool = False) -> list[Comando]:
         return [c for c in self.comandi.values()
-                if not c.nascosto and not (interattivo and c.solo_terminale)
+                if not c.nascosto and not (nel_cockpit and c.solo_terminale)
                 and not (not interattivo and c.solo_interattivo)]
 
     def trova(self, args: list[str]) -> tuple[Comando | None, list[str]]:
@@ -116,10 +117,10 @@ class Registro:
         vicini = difflib.get_close_matches(parola.lower(), nomi, n=1, cutoff=0.6)
         return vicini[0] if vicini else None
 
-    def completa(self, testo: str, interattivo: bool = True) -> list[Comando]:
-        """Comandi il cui nome inizia con `testo`, i piu' utili per primi."""
+    def completa(self, testo: str) -> list[Comando]:
+        """Comandi del cockpit il cui nome inizia con `testo`, i piu' utili per primi."""
         testo = " ".join(testo.split()).lower()
-        trovati = [c for c in self.visibili(interattivo) if c.nome.startswith(testo)]
+        trovati = [c for c in self.visibili(True, True) if c.nome.startswith(testo)]
         return sorted(trovati, key=lambda c: (c.priorita, c.nome))
 
     def esegui(self, ctx: Contesto, args: list[str]) -> int:
@@ -140,7 +141,7 @@ class Registro:
         if not ctx.interattivo and comando.solo_interattivo:
             ctx.errore("cli.serve_cockpit")
             return FALLITO
-        if ctx.interattivo and comando.solo_terminale:
+        if ctx.nel_cockpit and comando.solo_terminale:
             ctx.errore("cli.solo_terminale", comando=comando.nome)
             return USO
         if "--help" in resto or "-h" in resto:

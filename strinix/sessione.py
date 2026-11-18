@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from strinix.decodifica import decodifica as _decodifica
 from strinix.rete import Interfaccia, Strada
 from strinix.sorgente import Cattura, CatturaError
-from strinix.stato import Dispositivo, Evento, Memoria
+from strinix.stato import Dispositivo, Evento, InChiaro, Memoria
 
 MAX_EVENTI = 2000
 FINESTRA_PPS = 5  # secondi su cui si calcolano i pacchetti al secondo
@@ -38,10 +38,15 @@ class Istantanea:
     dispositivi: tuple[Dispositivo, ...]
     etichette: dict = field(default_factory=dict)   # MAC -> etichetta (router, questo_computer...)
     dns_in_chiaro_mio: int = 0
+    chiaro: tuple[InChiaro, ...] = ()               # protocolli non cifrati visti (mai il contenuto)
 
     @property
     def avvisi(self) -> tuple[Evento, ...]:
         return tuple(e for e in self.eventi if e.livello != "info")
+
+    @property
+    def password_in_chiaro(self) -> int:
+        return sum(c.credenziali for c in self.chiaro)
 
     @property
     def dns_cifrato(self) -> str:
@@ -125,7 +130,8 @@ class Sessione:
 
     def istantanea(self) -> Istantanea:
         with self._lock:
-            schede = tuple(replace(d) for d in self.memoria.dispositivi.values())
+            # copie vere (anche dei dizionari dentro): il cockpit non puo' toccare la memoria viva
+            schede = tuple(replace(d, destinazioni=dict(d.destinazioni)) for d in self.memoria.dispositivi.values())
             return Istantanea(
                 interfaccia=self.interfaccia, strada=self.strada, router_mac=self.router_mac,
                 attiva=self.attiva, errore=self.errore, inizio=self.inizio,
@@ -133,6 +139,7 @@ class Sessione:
                 eventi=tuple(self._eventi), dispositivi=schede,
                 etichette={d.mac: self.memoria.etichetta(d.mac) for d in schede},
                 dns_in_chiaro_mio=self.memoria.dns_in_chiaro_mio,
+                chiaro=tuple(replace(c) for c in self.memoria.chiaro.values()),
             )
 
     def ferma(self) -> None:

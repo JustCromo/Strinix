@@ -9,8 +9,9 @@ Fa parte della suite **Nemirix**, insieme a Vulpnix (risk assessment) ed
 Erinix (IDS sull'host). Erinix sorveglia la macchina, Strinix la rete.
 
 > Stato: **in sviluppo** (0.1.0.dev0). C'è il cockpit a tutto schermo, la
-> console classica e la riga di comando; Strinix riconosce dispositivi nuovi,
-> cambi sospetti nella tabella ARP e ricerche DNS.
+> console classica e la riga di comando. Strinix riconosce i dispositivi (con
+> produttore e nome), chi si collega a cosa, il traffico non cifrato e le
+> password che passano in chiaro, i cambi sospetti nella tabella ARP.
 
 ## Cosa può vedere
 
@@ -68,26 +69,57 @@ opzione sbagliati (con il suggerimento "intendevi...?").
 
 ### Il cockpit
 
-Quattro pannelli: **Avvisi** (le cose da controllare), **Live** (tutto quello
-che succede), **Dispositivi** (chi c'è in rete), **Rete** (la tua scheda, il
-router, la cattura, il DNS cifrato). Su uno schermo largo, a destra restano
-sempre visibili dispositivi e rete.
+Cinque pannelli:
+
+| Pannello | Cosa mostra |
+|---|---|
+| **Avvisi** | le cose da controllare: un IP che cambia proprietario, password in chiaro |
+| **Live** | cosa succede: chi si collega a cosa (`questo computer → github.com (HTTPS)`), ricerche DNS, dispositivi nuovi e i loro nomi |
+| **Dispositivi** | una scheda per ogni apparecchio: nome, produttore, IP, MAC, traffico, se è online |
+| **In chiaro** | i servizi usati senza cifratura (HTTP, FTP, Telnet, posta) e se è passata una password |
+| **Rete** | la tua scheda, il router, la cattura, il DNS cifrato |
+
+Su uno schermo largo, a destra restano sempre visibili dispositivi e rete.
 
 | Tasto | Cosa fa |
 |---|---|
 | `:` | scrivi un comando (Tab completa, ↑ ↓ cronologia) |
-| Tab, Maiusc+Tab, `1`-`4` | cambia pannello |
+| Tab, Maiusc+Tab, `1`-`5` | cambia pannello |
 | ↑ ↓, PgSu PgGiù | scegli una riga |
 | Invio | schermo intero, poi apre i dettagli della riga |
+| `c` | copia la riga scelta negli appunti |
+| `o` | ordina i dispositivi: comparsa, traffico, nome, IP |
 | `/` | cerca nel pannello |
 | `p` | mette in pausa la vista (l'ascolto continua) |
 | `?` | guida |
 | Esc | indietro |
 | `q` | esci |
 
+Il testo si può anche selezionare con il mouse: il cockpit riscrive solo le
+righe che cambiano, quindi la selezione resta (in alcuni terminali serve tenere
+premuto Maiusc). Il tasto `c` usa la sequenza OSC 52, supportata dalla maggior
+parte dei terminali moderni (kitty, Alacritty, foot, WezTerm, xterm...).
+
+Dentro il cockpit ci sono solo i comandi che servono lì (`aiuto`, `stato`,
+`dispositivi`, `avvisi`, `esci`); quelli di sistema (`verifica`, `interfacce`,
+`config`, `tema`, `versione`) si usano dal terminale.
+
 Il terminale viene sempre ripristinato, anche con Ctrl+C o se la finestra
 viene chiusa. Per ora, chiudendo il cockpit si ferma anche l'ascolto: l'agente
 in background arriverà nella prossima versione.
+
+### Come riconosce le cose
+
+- **Produttore**: dai primi 3 byte del MAC, con l'elenco che Scapy si porta
+  dietro (lo stesso di Wireshark), senza internet. I MAC casuali degli
+  smartphone non hanno produttore.
+- **Nome**: quello che il dispositivo dichiara da solo in rete (DHCP, mDNS),
+  per esempio `iPhone-di-Ivan`.
+- **Siti**: dalle risposte DNS e, per HTTPS, dal nome del sito che il browser
+  manda in chiaro all'inizio della connessione (SNI). Il contenuto resta cifrato.
+- **Traffico in chiaro**: riconosce HTTP, FTP, Telnet, POP3, IMAP e SMTP senza
+  cifratura. Se passa una password se ne accorge, ma **non la legge, non la
+  salva e non la mostra mai**.
 
 ### Colori
 
