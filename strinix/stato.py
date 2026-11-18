@@ -18,6 +18,20 @@ MAX_DNS = 512
 DNS_SILENZIO = 60.0  # secondi: la stessa richiesta dallo stesso dispositivo non si ripete prima
 
 
+@dataclass
+class Dispositivo:
+    mac: str
+    primo: float          # prima volta visto
+    ultimo: float         # ultima volta visto
+    pacchetti: int = 0
+    ip: str | None = None
+
+    @property
+    def mac_casuale(self) -> bool:
+        """Bit "amministrato localmente": MAC inventato, tipico degli smartphone con Wi-Fi privato."""
+        return bool(int(self.mac[:2], 16) & 0x02)
+
+
 @dataclass(frozen=True)
 class Evento:
     ora: float
@@ -38,20 +52,23 @@ def _unicast(mac: str | None) -> bool:
 
 
 class Memoria:
-    def __init__(self, mio_mac: str | None = None, router_mac: str | None = None,
+    def __init__(self, mio_mac: str | None = None, router_mac: str | None = None, mio_ip: str | None = None,
                  max_dispositivi: int = MAX_DISPOSITIVI, max_dns: int = MAX_DNS) -> None:
-        self.mio_mac, self.router_mac = mio_mac, router_mac
+        self.mio_mac, self.router_mac, self.mio_ip = mio_mac, router_mac, mio_ip
+        self.dns_in_chiaro_mio = 0    # richieste DNS non cifrate partite da questo computer
         self.max_dispositivi, self.max_dns = max_dispositivi, max_dns
-        self.dispositivi: dict[str, float] = {}       # MAC -> prima volta visto
+        self.dispositivi: dict[str, Dispositivo] = {}  # MAC -> scheda del dispositivo
         self.arp: dict[str, str] = {}                 # IP -> MAC
         self.dns: OrderedDict[tuple[str, str], float] = OrderedDict()
         self.piena = False
 
-    def _etichetta(self, mac: str) -> str:
+    def etichetta(self, mac: str) -> str:
         if mac == self.mio_mac:
             return "questo_computer"
         if mac == self.router_mac:
             return "router"
+        if int(mac[:2], 16) & 0x02:
+            return "mac_casuale"
         return "nessuna"
 
     def _segnala_piena(self, ora: float, eventi: list[Evento]) -> None:
@@ -80,17 +97,27 @@ class Memoria:
             ip_noto = p.ip_sorgente
 
         mac = p.mac_sorgente
-        if _unicast(mac) and mac not in self.dispositivi:
-            if len(self.dispositivi) < self.max_dispositivi:
-                self.dispositivi[mac] = ora
+        if _unicast(mac):
+            scheda = self.dispositivi.get(mac)
+            if scheda is not None:
+                scheda.ultimo = ora
+                scheda.pacchetti += 1
+                if ip_noto:
+                    scheda.ip = ip_noto
+            elif len(self.dispositivi) < self.max_dispositivi:
+                if ip_noto is None and mac == self.mio_mac:
+                    ip_noto = self.mio_ip
+                self.dispositivi[mac] = Dispositivo(mac, ora, ora, 1, ip_noto)
                 eventi.append(Evento(ora, "info", "evento.nuovo_dispositivo",
-                                     {"mac": mac, "ip": ip_noto or "-", "etichetta": self._etichetta(mac)}))
+                                     {"mac": mac, "ip": ip_noto or "-", "etichetta": self.etichetta(mac)}))
             else:
                 self._segnala_piena(ora, eventi)
 
         if p.dns and p.ip_sorgente:
             chiave = (p.ip_sorgente, p.dns.lower())
             ultima = self.dns.get(chiave)
+            if p.mac_sorgente == self.mio_mac:
+                self.dns_in_chiaro_mio += 1
             if ultima is None or ora - ultima >= DNS_SILENZIO:
                 eventi.append(Evento(ora, "info", "evento.dns", {"ip": p.ip_sorgente, "nome": p.dns}))
             self.dns[chiave] = ora

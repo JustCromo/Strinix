@@ -6,9 +6,10 @@ from pathlib import Path
 
 from strinix import messaggi
 from strinix.messaggi import t
-from strinix.terminale import Stile, pulisci
+from strinix.terminale import pulisci
 
-PREFISSI = "aiuto|cli|config|verifica|interfacce|ascolta|evento|cattura|etichetta"
+PREFISSI = ("aiuto|cli|config|verifica|interfacce|ascolta|evento|cattura|etichetta|descr|gruppo|stato|tipo"
+            "|tema|console|cockpit|rete|pannello|vuoto|dettaglio|dispositivi|avvisi")
 RADICE = Path(__file__).resolve().parent.parent / "strinix"
 
 
@@ -34,6 +35,20 @@ class TestTesti(unittest.TestCase):
         from strinix.sorgente import ERRORI
         for chiave in ERRORI.values():
             self.assertIn(chiave, testi)
+
+    def test_chiavi_costruite_al_volo(self):
+        from strinix.comandi.integrati import LIVELLI, crea_registro
+        from strinix.comandi.registro import GRUPPI
+        from strinix.tui.cockpit import PANNELLI
+        from strinix.ui.tema import RUOLI_TESTO
+        testi = messaggi.carica("it")
+        attese = ["descr." + "_".join(c.parole) for c in crea_registro().comandi.values()]
+        attese += ["gruppo." + g for g in GRUPPI]
+        attese += ["pannello." + p for p in PANNELLI] + ["vuoto." + p for p in PANNELLI]
+        attese += ["tema.ruolo." + r for r in RUOLI_TESTO] + ["tema.colori." + v for v in LIVELLI.values()]
+        attese += ["tipo." + e for e in ("questo_computer", "router", "mac_casuale", "nessuna")]
+        attese += ["etichetta." + e for e in ("questo_computer", "router", "mac_casuale", "nessuna")]
+        self.assertEqual([k for k in attese if k not in testi], [])
 
     def test_modelli_ben_formati(self):
         for chiave, modello in messaggi.carica("it").items():
@@ -75,9 +90,6 @@ class TestPulizia(unittest.TestCase):
         s = t("cli.sconosciuto", comando="{__class__}")
         self.assertIn("{__class__}", s)
 
-    def test_stile_spento(self):
-        self.assertEqual(Stile(False)("ok", "x"), "x")
-        self.assertIn("\x1b[", Stile(True)("ok", "x"))
 
 
 if __name__ == "__main__":

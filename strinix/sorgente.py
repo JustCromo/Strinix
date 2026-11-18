@@ -56,13 +56,8 @@ def _leggi(stream: BinaryIO, n: int) -> bytes:
     return dati
 
 
-def leggi_frame(stream: BinaryIO) -> Iterator[Frame]:
-    """Legge il flusso del custode controllando ogni campo. Finisce quando il flusso finisce."""
-    magia = _leggi(stream, len(cattura.MAGIA))
-    if not magia:
-        return
-    if magia != cattura.MAGIA:
-        raise CatturaError("cattura.protocollo")
+def _frame(stream: BinaryIO) -> Iterator[Frame]:
+    """Legge i pacchetti dopo la MAGIA, controllando ogni campo. Finisce quando il flusso finisce."""
     while True:
         testa = _leggi(stream, cattura.INTESTAZIONE.size)
         if not testa:
@@ -76,6 +71,16 @@ def leggi_frame(stream: BinaryIO) -> Iterator[Frame]:
         if len(dati) != n:
             raise CatturaError("cattura.protocollo")
         yield Frame(ora, tipo, dati)
+
+
+def leggi_frame(stream: BinaryIO) -> Iterator[Frame]:
+    """Legge l'intero flusso del custode: prima la MAGIA, poi i pacchetti."""
+    magia = _leggi(stream, len(cattura.MAGIA))
+    if not magia:
+        return
+    if magia != cattura.MAGIA:
+        raise CatturaError("cattura.protocollo")
+    yield from _frame(stream)
 
 
 class Cattura:
@@ -95,16 +100,33 @@ class Cattura:
             raise CatturaError("cattura.sudo_manca") from None
         return self
 
+    def attendi(self) -> None:
+        """Aspetta che il custode sia pronto (qui sudo chiede la password). Lancia CatturaError se non parte."""
+        assert self.proc is not None and self.proc.stdout is not None
+        magia = _leggi(self.proc.stdout, len(cattura.MAGIA))
+        if not magia:
+            codice = self.proc.wait()
+            raise CatturaError(ERRORI.get(codice, "cattura.fermata"), codice=codice)
+        if magia != cattura.MAGIA:
+            raise CatturaError("cattura.protocollo")
+        self.avviata = True
+
     def frame(self) -> Iterator[Frame]:
         assert self.proc is not None and self.proc.stdout is not None
-        for f in leggi_frame(self.proc.stdout):
-            self.avviata = True
-            yield f
-        codice = self.proc.wait()
         if not self.avviata:
-            raise CatturaError(ERRORI.get(codice, "cattura.fermata"), codice=codice)
+            self.attendi()
+        yield from _frame(self.proc.stdout)
+        codice = self.proc.wait()
         if codice != 0:
             raise CatturaError("cattura.fermata", codice=codice)
+
+    def chiudi_ingresso(self) -> None:
+        """Dice al custode di fermarsi (chiude il suo stdin), senza toccare il flusso in lettura."""
+        if self.proc is not None and self.proc.stdin is not None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
 
     def __exit__(self, *exc: object) -> None:
         if self.proc is None:

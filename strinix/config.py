@@ -6,14 +6,13 @@ FIFO o dispositivi), tuo, non scrivibile da altri, piccolo, e con solo chiavi no
 
 from __future__ import annotations
 
-import errno
 import os
 import re
-import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from strinix import file_sicuri
 from strinix.messaggi import LINGUE
 
 # nomi interfaccia Linux: al massimo 15 caratteri (IFNAMSIZ - 1), solo caratteri innocui,
@@ -56,35 +55,12 @@ def percorso_predefinito() -> Path:
     return radice / "strinix" / "config.toml"
 
 
-def _leggi_sicuro(percorso: Path) -> bytes | None:
-    try:
-        # O_NONBLOCK: una FIFO al posto del file non deve bloccare Strinix
-        fd = os.open(percorso, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise ConfigError("config.link", percorso=percorso) from None
-        raise ConfigError("config.illeggibile", percorso=percorso) from None
-    try:
-        st = os.fstat(fd)  # controlli sul file gia' aperto: nessuno puo' scambiarlo nel frattempo
-        if not stat.S_ISREG(st.st_mode):
-            raise ConfigError("config.non_file", percorso=percorso)
-        if st.st_uid != os.geteuid():
-            raise ConfigError("config.proprietario", percorso=percorso)
-        if st.st_mode & 0o022:
-            raise ConfigError("config.permessi", percorso=percorso)
-        dati = os.read(fd, MAX_BYTE + 1)
-    finally:
-        os.close(fd)
-    if len(dati) > MAX_BYTE:
-        raise ConfigError("config.troppo_grande", percorso=percorso, massimo=MAX_BYTE)
-    return dati
-
-
 def carica(percorso: Path | None = None) -> Config:
     p = percorso or percorso_predefinito()
-    dati = _leggi_sicuro(p)
+    try:
+        dati = file_sicuri.leggi(p, MAX_BYTE)
+    except file_sicuri.FileNonSicuro as exc:
+        raise ConfigError("config." + exc.motivo, percorso=p, massimo=MAX_BYTE) from None
     if dati is None:
         return Config()
     try:
@@ -106,13 +82,8 @@ def carica(percorso: Path | None = None) -> Config:
 def crea(percorso: Path | None = None) -> Path:
     """Scrive il file di esempio (permessi 600, cartella 700). Non sovrascrive mai."""
     p = percorso or percorso_predefinito()
-    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    except FileExistsError:
-        raise ConfigError("config.esiste", percorso=p) from None
-    except OSError:
-        raise ConfigError("config.illeggibile", percorso=p) from None
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(MODELLO)
+        file_sicuri.scrivi(p, MODELLO, sovrascrivi=False)
+    except file_sicuri.FileNonSicuro as exc:
+        raise ConfigError("config." + exc.motivo, percorso=p) from None
     return p

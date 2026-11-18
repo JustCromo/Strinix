@@ -47,6 +47,23 @@ sistema, di proprietà di root.
 - `strinix config crea` scrive il file con permessi `600`, non segue
   collegamenti e non sovrascrive mai un file esistente.
 
+## Comandi e terminale
+
+- I comandi sono una **tabella chiusa**: nessun comando viene costruito da
+  testo esterno e non si lancia mai una shell, nemmeno dalla riga dei comandi
+  del cockpit (che divide il testo sugli spazi e cerca nella tabella).
+- Un'opzione sconosciuta è un errore, non viene ignorata.
+- Ogni testo che arriva da fuori viene ripulito prima di finire nel
+  terminale: caratteri di controllo, sequenze di escape e caratteri Unicode
+  che girano o nascondono il testo (bidi). Le righe vengono tagliate alla
+  larghezza della finestra.
+- `--json` non contiene mai sequenze di escape: i caratteri di controllo
+  diventano `\uXXXX`.
+- Cronologia dei comandi e stato del cockpit stanno in
+  `~/.local/state/strinix/`, cartella `700` e file `600`, letti e scritti con
+  le stesse regole del file di configurazione (niente collegamenti, solo file
+  tuoi). Se sono rovinati, Strinix li ignora.
+
 ## Segnalare un problema
 
 Se trovi un problema di sicurezza, apri una segnalazione privata dalla scheda
