@@ -128,6 +128,11 @@ class TestDisegno(unittest.TestCase):
         self.assertTrue(c.intero)
         self.assertIn("─ 4 In chiaro", schermo)
 
+    def test_respiro_tra_testata_e_pannelli(self):
+        righe = [visibile(r) for r in self.cockpit().righe(205, 48)]
+        self.assertEqual(righe[2].strip(), "")
+        self.assertTrue(righe[3].startswith("┌"))
+
     def test_lo_sfondo_del_terminale_resta_visibile(self):
         c = self.cockpit(tema=tm.Tema(tm.TRUECOLOR, True))
         for r in c.righe(205, 48):
@@ -139,7 +144,7 @@ class TestDisegno(unittest.TestCase):
         c.pannello = PANNELLI.index("dispositivi")
         riga = next(r for r in c.righe(205, 48) if "3 Dispositivi" in visibile(r))
         sinistra, destra = riga.split("3 Dispositivi")[0].rsplit("┌", 1)[0], riga
-        self.assertIn(tema.sgr_testo("accento") + "┌", destra)          # Dispositivi: bordo ambra
+        self.assertIn(tema.sgr_testo("bordo_attivo") + "┌", destra)     # Dispositivi: bordo luna
         self.assertIn(tema.sgr_testo("bordo") + "┌", sinistra)          # Avvisi: bordo normale
 
     def test_finestra_stretta_un_pannello_alla_volta(self):
@@ -166,7 +171,7 @@ class TestDisegno(unittest.TestCase):
             with self.subTest(colonne=colonne):
                 self.assertIn("Cosa fare", testo)
                 self.assertIn("Cosa significa", testo)
-                corpo = righe[4:-3]
+                corpo = righe[5:-3]          # senza testata, titolo del riquadro e piede
                 self.assertFalse(any("…" in r for r in corpo), corpo)
 
     def test_ascii(self):

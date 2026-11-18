@@ -15,7 +15,8 @@ NOME = "Bosco notturno"
 PALETTE = {
     "sfondo": "#191C21",      # notte
     "superficie": "#20242B",
-    "bordo": "#2E333C",
+    "bordo": "#5C6573",       # bordi dei pannelli: visibili anche su sfondi scuri o con immagini
+    "bordo_attivo": "#8FB3C9",  # il pannello scelto: luna
     "selezione": "#2A2F37",
     "testo": "#D9D3C7",       # piuma
     "tenue": "#7C8491",       # grigio piuma
@@ -25,11 +26,11 @@ PALETTE = {
     "avviso": "#DE9A62",      # foglia secca
     "errore": "#CF6F6F",      # bacca
 }
-RUOLI_TESTO = ("testo", "tenue", "accento", "dati", "ok", "avviso", "errore", "bordo")
+RUOLI_TESTO = ("testo", "tenue", "accento", "dati", "ok", "avviso", "errore", "bordo", "bordo_attivo")
 
 # a 16 colori: stesso significato, colori standard del terminale
 ANSI16 = {"testo": "", "tenue": "90", "accento": "33", "dati": "36", "ok": "32",
-          "avviso": "93", "errore": "31", "bordo": "90"}
+          "avviso": "93", "errore": "31", "bordo": "90", "bordo_attivo": "96"}
 
 NESSUNO, BASE16, COLORI256, TRUECOLOR = 0, 16, 256, 16_777_216
 

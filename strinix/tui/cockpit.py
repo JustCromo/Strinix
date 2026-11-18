@@ -581,7 +581,7 @@ class Cockpit:
     def _riquadro(self, titolo: Riga, contenuto: list[Riga], colonne: int, altezza: int,
                   selezionata: int | None = None, attivo: bool = False) -> list[Riga]:
         s = self.tema.simbolo
-        bordo = "accento" if attivo else "bordo"
+        bordo = "bordo_attivo" if attivo else "bordo"
         interna = colonne - 2
         testa = [(bordo, s("as") + s("o") + " ")] + titolo + [("testo", " ")]
         testa = adatta(testa, colonne - 1, s("puntini"))
@@ -598,7 +598,7 @@ class Cockpit:
         return righe
 
     def _titolo(self, nome: str, n_voci: int, attivo: bool) -> Riga:
-        riga: Riga = [("tenue", f"{PANNELLI.index(nome) + 1} "), ("accento" if attivo else "testo", t("pannello." + nome))]
+        riga: Riga = [("tenue", f"{PANNELLI.index(nome) + 1} "), ("bordo_attivo" if attivo else "testo", t("pannello." + nome))]
         if nome in ("avvisi", "dispositivi", "chiaro") and n_voci:
             riga.append(("tenue", f" {n_voci}"))
         if nome == "dispositivi" and ORDINI[self.ordine] != "comparsa":
@@ -653,7 +653,7 @@ class Cockpit:
         avvolte = [x for r in righe for x in avvolgi(r, interna, _rientro(r))]
         visibili = max(1, altezza - 2)
         self.scorri_sovr = max(0, min(self.scorri_sovr, max(0, len(avvolte) - visibili)))
-        return self._riquadro([("accento", titolo)], avvolte[self.scorri_sovr:], colonne, altezza, attivo=True)
+        return self._riquadro([("bordo_attivo", titolo)], avvolte[self.scorri_sovr:], colonne, altezza, attivo=True)
 
     def _testata(self, ist: Istantanea, colonne: int) -> tuple[Riga, Riga]:
         """Due righe, come Erinix: una frase sulla situazione, poi i numeri e il grafico dell'attivita'."""
@@ -762,7 +762,8 @@ class Cockpit:
         ist = self.istantanea()
         prima, numeri = self._testata(ist, colonne)
         panoramica = colonne >= SCHERMO_LARGO and altezza >= ALTEZZA_MINIMA and not self.intero and not self.sovrapposto
-        testa = [prima, numeri] if panoramica else [prima, numeri, self._schede(colonne)]
+        vuota: Riga = [("testo", "")]     # un po' di respiro tra la testata e i pannelli
+        testa = [prima, numeri, vuota] if panoramica else [prima, numeri, self._schede(colonne), vuota]
         alt_corpo = max(3, altezza - len(testa) - 2)
         if self.sovrapposto is not None:
             corpo = self._pagina(colonne, alt_corpo)
